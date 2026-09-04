@@ -178,17 +178,73 @@ def load_gt_dicom(
     volume = volume.clip(0.0, 1.0)
     if xy_invert:
         volume = volume[::-1, ::-1, :].copy()
+    # Physical position info for the real pipeline: the reconstruction box must
+    # cover the anatomy, so sVoxel/offOrigin are derived from these values
+    # (scaled to scene units by the caller).
+    ipp = _value(ds0, "ImagePositionPatient")
+    zs = np.array([r[2] for r in records], dtype=float)
     return volume, {
         "source_shape": list(records[0][3].shape) + [len(records)],
         "spacing_mm": [float(spacing_xy[0]), float(spacing_xy[1]), spacing_z],
+        "origin_mm": (
+            [float(ipp[0]), float(ipp[1]), float(zs.min())]
+            if ipp is not None and len(ipp) >= 3
+            else None
+        ),
+        "z_range_mm": [float(zs.min()), float(zs.max())],
         "hu_window": [-1000.0, 2000.0],
         "hu_range_after_window": [hu_min, hu_max],
         "normalized_range": [float(volume.min()), float(volume.max())],
     }
 
 
+def _header_only_geometry(dicom_root: Path) -> dict:
+    """Read physical geometry from DICOM headers only (no pixel data).
+
+    Used when a real dataset's GT pixel data is unavailable/truncated but the
+    volume content already exists as a preprocessed .npy: the reconstruction
+    box size still comes from the true DICOM spacing (Rows/Cols x PixelSpacing,
+    slice z positions), matching the load_gt_dicom convention.
+    """
+    headers = []
+    for path in _dicom_files(dicom_root):
+        ds = pydicom.dcmread(path, stop_before_pixels=True, force=True)
+        pos = _value(ds, "ImagePositionPatient")
+        z = float(pos[2]) if pos is not None and len(pos) >= 3 else float(
+            _value(ds, "SliceLocation", default=_value(ds, "InstanceNumber", default=0))
+        )
+        instance = int(_value(ds, "InstanceNumber", default=len(headers)))
+        headers.append((instance, path.name, z, ds))
+    headers.sort(key=lambda x: x[0])
+    ds0 = headers[0][3]
+    rows = int(_value(ds0, "Rows", default=0))
+    # DICOM 关键字是 Columns（不是 Cols），部分实现 getattr(ds, "Cols") 会落空
+    cols = int(_value(ds0, "Columns", default=0))
+    spacing_xy = np.asarray(_value(ds0, "PixelSpacing", default=[1.0, 1.0]), dtype=float)
+    zs = np.array([h[2] for h in headers], dtype=float)
+    spacing_z = (
+        float(np.median(np.abs(np.diff(zs))))
+        if len(headers) > 1
+        else float(_value(ds0, "SliceThickness", default=1.0))
+    )
+    ipp = _value(ds0, "ImagePositionPatient")
+    return {
+        "source_shape": [rows, cols, len(headers)],
+        "spacing_mm": [float(spacing_xy[0]), float(spacing_xy[1]), spacing_z],
+        "origin_mm": (
+            [float(ipp[0]), float(ipp[1]), float(zs.min())]
+            if ipp is not None and len(ipp) >= 3
+            else None
+        ),
+        "z_range_mm": [float(zs.min()), float(zs.max())],
+    }
+
+
 def load_gt_source(
-    source: Path, target_shape: tuple[int, int, int], xy_invert: bool = False
+    source: Path,
+    target_shape: tuple[int, int, int],
+    xy_invert: bool = False,
+    header_dicom: Path | None = None,
 ) -> tuple[np.ndarray, dict]:
     if source.suffix.lower() != ".npy":
         return load_gt_dicom(source, target_shape, xy_invert)
@@ -200,11 +256,15 @@ def load_gt_source(
         raise ValueError(f"Ground-truth volume contains NaN or Inf: {source}")
     if xy_invert:
         volume = volume[::-1, ::-1, :].copy()
-    return volume, {
+    info = {
         "source_type": "npy",
         "source_shape": list(np.load(source, mmap_mode="r").shape),
         "normalized_range": [float(volume.min()), float(volume.max())],
     }
+    if header_dicom is not None:
+        # 真实数据：GT 像素缺失/截断时内容用 npy，物理几何从 DICOM 头信息获取。
+        info.update(_header_only_geometry(header_dicom))
+    return volume, info
 
 
 def flatten_cylindrical_detector(projs: np.ndarray, dsd: float, spacing: list[float]):
@@ -566,7 +626,10 @@ def run(config_path: Path, validate_only=False):
         return
     target = tuple(int(x) for x in cfg["scanner"]["nVoxel"])
     volume, gt_info = load_gt_source(
-        Path(cfg["raw_gt"]), target, bool(cfg.get("gt_xy_invert", False))
+        Path(cfg["raw_gt"]), target, bool(cfg.get("gt_xy_invert", False)),
+        header_dicom=Path(cfg["real"]["gt_header_dicom"])
+        if cfg["dataset_type"] == "real" and cfg.get("real", {}).get("gt_header_dicom")
+        else None,
     )
     scanner = copy.deepcopy(cfg["scanner"])
     if cfg["dataset_type"] == "syn":
@@ -587,7 +650,9 @@ def run(config_path: Path, validate_only=False):
     scanner.setdefault("accuracy", 0.5)
     scanner.setdefault("filter", None)
     real_bounds = (
-        _set_real_volume_bounds(scanner, z, cfg)
+        _set_real_volume_bounds_from_gt(scanner, gt_info, z, cfg)
+        if cfg["dataset_type"] == "real" and cfg.get("real", {}).get("auto_svoxel_from_gt", False)
+        else _set_real_volume_bounds(scanner, z, cfg)
         if cfg["dataset_type"] == "real"
         else {"enabled": False}
     )

@@ -1,13 +1,11 @@
 dataset_type: real
-organ: ldctc001
-model: r2gs
-# GT 像素数据已截断（256KB）——内容用预处理好的 npy，物理几何（间距/原点）从 DICOM 头信息获取
-raw_gt: /opt/data/private/data/ldctc001/ldct_c001.npy
-raw_proj: /opt/data/private/data/ldctc001/01-31-2022-NA-NA-49153/1.000000-Full Dose Projections-31861
+organ: ldctl004
+model: r2gs_det4x
+raw_gt: /opt/data/private/data/ldctl004/LDCT-and-Projection-data/L004/12-23-2021-NA-NA-40641/1.000000-Full Dose Images-63186
+raw_proj: /opt/data/private/data/ldctl004/LDCT-and-Projection-data/L004/08-21-2018-NA-NA-10971/1.000000-Full dose projections-24362
 gt_xy_invert: false
 output_root: data
-n_train: 1000
-n_test: 1500
+n_train: 4000
 seed: 0
 
 stitch:
@@ -17,6 +15,7 @@ stitch:
 
 object_scale: 50
 proj_rescale: 400
+proj_subsample: 1
 
 scanner:
   mode: cone
@@ -25,8 +24,8 @@ scanner:
   nDetector: [64, 888]
   sDetector: [3.2764801, 45.4611614]
   nVoxel: [256, 256, 256]
-  sVoxel: [16.0, 16.0, 24.0]
-  offOrigin: [0, 0, 0]
+  sVoxel: [15.0, 15.0, 14.7]
+  offOrigin: [0, 0, 0]  # 实际值运行时从投影 z_shift 范围计算（scan 坐标系）
   offDetector: [0, 0]
   accuracy: 0.5
   coord_left: true
@@ -50,4 +49,3 @@ init:
 real:
   auto_svoxel_from_gt: true
   equal_xyz_span: false
-  gt_header_dicom: /opt/data/private/data/ldctc001/02-04-2022-NA-NA-00775/304.000000-Full Dose Images-32775
