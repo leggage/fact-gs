@@ -9,3 +9,6 @@ training_logs/
 .cursor/
 .hypothesis/
 .claude/
+third_party/SIBR_viewers/build*/
+third_party/SIBR_viewers/install/
+third_party/SIBR_viewers/source/extlibs/*/build/

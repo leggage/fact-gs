@@ -7,3 +7,6 @@ visualize_gaussians: False
 extra_eval_iter_num: None
 record_densify_grads: False # 每个 densification 事件保存决策梯度(compact) + eval 目录保存完整梯度；仅研究用
 record_population: False # 每个 densification 事件保存人口记账（xyz 快照/出生/剪枝/世界梯度）；仅研究用
+sibr_export: False # export density-coloured SIBR PLY snapshots during training
+sibr_export_interval: 1000 # steps; final step is always exported when enabled
+sibr_camera_mode: orbit # orbit: full-volume circular inspection; spiral: acquisition cameras

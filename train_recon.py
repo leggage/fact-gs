@@ -28,6 +28,7 @@ from fact_gs.r2_gaussian.utils.image_utils import metric_vol, metric_proj
 from fact_gs import rasterize_proj, voxelize_vol
 from fact_gs.utils.profile import setup_profiler
 from fact_gs.utils.vol_utils import save_volume, visualize_gaussian_footprint, visualize_gaussian_position, save_error_maps
+from fact_gs.utils.sibr_export import export_gaussian_model
 
 
 
@@ -472,6 +473,11 @@ def optimize(config, profiler=None, tb_writer=None):
     latest_eval_metrics = None
     densify_record_enabled = bool(getattr(eval_args, "record_densify_grads", False))
     population_record_enabled = bool(getattr(eval_args, "record_population", False))
+    sibr_export_enabled = bool(getattr(eval_args, "sibr_export", False))
+    sibr_export_interval = int(getattr(eval_args, "sibr_export_interval", 1000))
+    sibr_camera_mode = str(getattr(eval_args, "sibr_camera_mode", "orbit"))
+    if sibr_export_enabled and sibr_export_interval <= 0:
+        raise ValueError("eval.sibr_export_interval must be positive")
     if population_record_enabled:
         gaussians.event_log_enabled = True
         gaussians.event_log = []
@@ -627,6 +633,23 @@ def optimize(config, profiler=None, tb_writer=None):
             if step == optim_args.steps:
                 tqdm.write(f"[STEP {step}] Saving Gaussians")
                 scene.save(step, voxelizefunc, vol_format="tiff")
+
+            if sibr_export_enabled and (
+                step % sibr_export_interval == 0 or step == optim_args.steps
+            ):
+                stats = export_gaussian_model(
+                    gaussians,
+                    scene.model_path,
+                    step,
+                    cameras=scene.getTrainCameras(),
+                    viewer_bbox=scene.bbox.detach().cpu().numpy(),
+                    viewer_orbit_radius=float(scanner_cfg["DSO"]),
+                    viewer_camera_mode=sibr_camera_mode,
+                )
+                tqdm.write(
+                    f"[STEP {step}] SIBR snapshot: {stats['count']} Gaussians, "
+                    f"density [{stats['density_min']:.3g}, {stats['density_max']:.3g}]"
+                )
 
             # Progress bar
             if step % 10 == 0:
