@@ -1,9 +1,9 @@
 dataset_type: real
-organ: ldctc001
+organ: ldctc002
 model: r2gs
-# GT 像素数据已截断（256KB）——内容用预处理好的 npy，物理几何（间距/原点）从 DICOM 头信息获取
-raw_gt: /opt/data/private/data/ldctc001/ldct_c001.npy
-raw_proj: /opt/data/private/data/ldctc001/01-31-2022-NA-NA-49153/1.000000-Full Dose Projections-31861
+# GT DICOM 完整（526KB/文件，512×512，280 层，dz=1.0mm）——直接读 DICOM，物理几何同时从 DICOM 头获取
+raw_gt: /opt/data/private/data/ldctc002/LDCT-and-Projection-data/C002/12-23-2021-NA-NA-62464/1.000000-Full Dose Images-22038
+raw_proj: /opt/data/private/data/ldctc002/LDCT-and-Projection-data/C002/08-30-2018-NA-NA-57448/1.000000-Full dose projections-22835
 gt_xy_invert: false
 output_root: data
 n_train: 1000
@@ -26,7 +26,7 @@ scanner:
   sDetector: [3.2764801, 45.4611614]
   nVoxel: [256, 256, 256]
   sVoxel: [16.0, 16.0, 24.0]
-  offOrigin: [0, 0, 0]
+  offOrigin: [0, 0, 0]  # 实际值运行时从 GT 物理范围 + 投影 z_shift 范围计算
   offDetector: [0, 0]
   accuracy: 0.5
   coord_left: true
@@ -50,4 +50,3 @@ init:
 real:
   auto_svoxel_from_gt: true
   equal_xyz_span: false
-  gt_header_dicom: /opt/data/private/data/ldctc001/02-04-2022-NA-NA-00775/304.000000-Full Dose Images-32775
