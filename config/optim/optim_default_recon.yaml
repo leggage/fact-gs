@@ -30,6 +30,20 @@ max_scale: null  # percent of volume size
 max_num_gaussians: null  # optional multiplier relative to model.num_gaussians
 max_num_gaussians_absolute: 500000 # original spiral quality ceiling
 
+# --- ImprovedGS 移植（improved-densification 分支，Improved-GS 官方实现移植）---
+# densification_method=legacy 时以下参数全部忽略，行为与改动前完全一致。
+densification_method: legacy # legacy | improved；improved = 预算式 densify（Growth Control + 去 clone + LAS + EAS）
+improved_budget_absolute: 500000 # growth control 总预算（√progress 爬坡上限；0=退回 max_num_gaussians_absolute）
+improved_budget_warmup_until_offset: 500 # 预算爬坡提前多少步到顶（相对 densify 窗口末尾）
+use_las: true # 长轴分裂：子代沿最长轴 ±3·d·σ 确定性放置（不再随机三维散射）
+split_distance: 0.45 # LAS 子代偏移比例（3·d·σ_long；论文默认 0.45）
+split_density_reduction: 0.6 # LAS 子代密度衰减系数（论文 opacity_reduction 0.6 对应移植）
+eas_use: qualify # off | rank | qualify；rank=忠实论文（仅排序，资格仍梯度）；qualify=边缘分进入资格（与梯度 OR，打冷启动边缘带低梯度缺口）
+eas_sample_cams: 10 # 每次 densify 事件采样的 EAS 边缘评分视角数
+eas_qualify_quantile: 0.95 # qualify 模式：边缘分 ≥ 正分群体该分位的（top 5%）进入资格
+
 ssim3d_early_stop: false
 ssim3d_early_stop_threshold: 0.0
 training_time_limit_seconds: 0.0
+early_stop_after_steps: 0 # 0=disabled；研究用：在第 N 步 eval 后提前停（LR 衰减仍按 steps 全量走）
+outside_gaussian_budget: 0.0 # 0=off；研究用(2a)：框外高斯占比上限，超出后 densify 不再选择框外高斯

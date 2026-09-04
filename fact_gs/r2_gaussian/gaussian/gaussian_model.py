@@ -10,6 +10,7 @@
 #
 import os
 import sys
+import math
 import torch
 from torch import nn
 import pickle
@@ -72,6 +73,17 @@ class GaussianModel:
         self.optimizer = None
         self.spatial_lr_scale = 0
         self.scale_bound = scale_bound
+        # 人口记账（研究用，eval.record_population 开启后由 train_recon 置 True）：
+        # densify/prune 事件把出生（clone/split，含 parent 位置）与剪枝
+        # （含原因码）追加到 event_log；train_recon 在每个事件后取走并清空。
+        self.event_log_enabled = False
+        self.event_log = []
+        # 干预实验（研究用）：
+        # _densify_exclude：本次事件 densify 选择要排除的高斯（2a 框外预算）；
+        # clamp_birth_box：出生子代 clamp 到的框 (lo, hi)（2b）；None=不干预。
+        self._densify_exclude = None
+        self._born_this_event = 0
+        self.clamp_birth_box = None
         self.setup_functions()
 
     def capture(self):
@@ -346,7 +358,16 @@ class GaussianModel:
                 optimizable_tensors[group["name"]] = group["params"][0]
         return optimizable_tensors
 
-    def prune_points(self, mask):
+    def prune_points(self, mask, tag="prune", reasons=None):
+        """删除 mask 命中的高斯。tag 区分剪枝来源；reasons 为逐行原因码。"""
+        if self.event_log_enabled and bool(mask.any()):
+            self.event_log.append({
+                "kind": "prune",
+                "tag": tag,  # "prune" | "split_parent"
+                "reason": None if reasons is None
+                else reasons[mask].detach().cpu().numpy(),
+                "xyz": self.get_xyz[mask].detach().cpu().numpy(),
+            })
         valid_points_mask = ~mask
         optimizable_tensors = self._prune_optimizer(valid_points_mask)
 
@@ -403,6 +424,7 @@ class GaussianModel:
         new_rotation,
         new_max_radii2D,
     ):
+        self._born_this_event += len(new_xyz)
         d = {
             "xyz": new_xyz,
             "density": new_densities,
@@ -430,6 +452,12 @@ class GaussianModel:
             selected_pts_mask,
             torch.max(self.get_scaling, dim=1).values > densify_scale_threshold,
         )
+        if self._densify_exclude is not None:
+            # clone 在前已扩容：exclude 是 pre-clone 的行号，pad 到当前 N
+            exclude = torch.zeros(n_init_points, dtype=torch.bool,
+                                  device=selected_pts_mask.device)
+            exclude[: self._densify_exclude.shape[0]] = self._densify_exclude
+            selected_pts_mask = selected_pts_mask & ~exclude
 
         stds = self.get_scaling[selected_pts_mask].repeat(N, 1)
         means = torch.zeros((stds.size(0), 3), device="cuda")
@@ -448,6 +476,15 @@ class GaussianModel:
         )
         new_max_radii2D = self.max_radii2D[selected_pts_mask].repeat(N)
 
+        if self.event_log_enabled and bool(selected_pts_mask.any()):
+            self.event_log.append({
+                "kind": "birth",
+                "type": "split",
+                "xyz": new_xyz.detach().cpu().numpy(),
+                "parent_xyz": self.get_xyz[selected_pts_mask].repeat(N, 1)
+                .detach().cpu().numpy(),
+            })
+
         self.densification_postfix(
             new_xyz,
             new_density,
@@ -462,7 +499,7 @@ class GaussianModel:
                 torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool),
             )
         )
-        self.prune_points(prune_filter)
+        self.prune_points(prune_filter, tag="split_parent")
 
     def densify_and_clone(self, grads, grad_threshold, densify_scale_threshold):
         # Extract points that satisfy the gradient condition
@@ -473,6 +510,8 @@ class GaussianModel:
             selected_pts_mask,
             torch.max(self.get_scaling, dim=1).values <= densify_scale_threshold,
         )
+        if self._densify_exclude is not None:
+            selected_pts_mask = selected_pts_mask & ~self._densify_exclude
 
         new_xyz = self._xyz[selected_pts_mask]
         # new_densities = self._density[selected_pts_mask]
@@ -484,6 +523,14 @@ class GaussianModel:
         new_max_radii2D = self.max_radii2D[selected_pts_mask]
 
         self._density[selected_pts_mask] = new_densities
+
+        if self.event_log_enabled and bool(selected_pts_mask.any()):
+            self.event_log.append({
+                "kind": "birth",
+                "type": "clone",
+                "xyz": new_xyz.detach().cpu().numpy(),
+                "parent_xyz": new_xyz.detach().cpu().numpy(),
+            })
 
         self.densification_postfix(
             new_xyz,
@@ -502,9 +549,29 @@ class GaussianModel:
         max_num_gaussians,
         densify_scale_threshold,
         bbox=None,
+        outside_box=None,
+        outside_budget=0.0,
     ):
         grads = self.xyz_gradient_accum / self.denom
         grads[grads.isnan()] = 0.0
+
+        self._densify_exclude = None
+        self._born_this_event = 0
+
+        # 2a 干预（研究用）：框外高斯数已达预算比例后，本次 densify 不再选择
+        # 框外高斯（打断框外 clone/split 放大，同时保留优化器迁移出框的自由）。
+        if outside_budget > 0 and outside_box is not None:
+            xyz = self.get_xyz
+            outside = (
+                (xyz[:, 0] < outside_box[0, 0])
+                | (xyz[:, 0] > outside_box[1, 0])
+                | (xyz[:, 1] < outside_box[0, 1])
+                | (xyz[:, 1] > outside_box[1, 1])
+                | (xyz[:, 2] < outside_box[0, 2])
+                | (xyz[:, 2] > outside_box[1, 2])
+            )
+            if outside.sum() >= outside_budget * xyz.shape[0]:
+                self._densify_exclude = outside
 
         # Densify Gaussians if Gaussians are fewer than threshold
         if densify_scale_threshold:
@@ -514,8 +581,11 @@ class GaussianModel:
                 self.densify_and_clone(grads, max_grad, densify_scale_threshold)
                 self.densify_and_split(grads, max_grad, densify_scale_threshold)
 
-        # Prune gaussians with too small density
+        # Prune gaussians with too small density；原因码: 1=density, 2=bbox, 3=screen, 4=scale
         prune_mask = (self.get_density < min_density).squeeze()
+        reason = torch.zeros(prune_mask.shape, dtype=torch.int8,
+                             device=prune_mask.device)
+        reason[prune_mask] = 1
         # Prune gaussians outside the bbox
         if bbox is not None:
             xyz = self.get_xyz
@@ -527,30 +597,278 @@ class GaussianModel:
                 | (xyz[:, 2] < bbox[0, 2])
                 | (xyz[:, 2] > bbox[1, 2])
             )
-
+            reason = torch.where(prune_mask_xyz & (reason == 0),
+                                 torch.tensor(2, dtype=reason.dtype,
+                                              device=reason.device), reason)
             prune_mask = prune_mask | prune_mask_xyz
 
         if max_screen_size:
             big_points_vs = self.max_radii2D > max_screen_size
+            reason = torch.where(big_points_vs & (reason == 0),
+                                 torch.tensor(3, dtype=reason.dtype,
+                                              device=reason.device), reason)
             prune_mask = torch.logical_or(prune_mask, big_points_vs)
         if max_scale:
             big_points_ws = self.get_scaling.max(dim=1).values > max_scale
+            reason = torch.where(big_points_ws & (reason == 0),
+                                 torch.tensor(4, dtype=reason.dtype,
+                                              device=reason.device), reason)
             prune_mask = torch.logical_or(prune_mask, big_points_ws)
-        self.prune_points(prune_mask)
+        self.prune_points(prune_mask, tag="prune", reasons=reason)
+
+        # 2b 干预（研究用）：本次事件出生的子代（clone/split，位于张量末尾）
+        # clamp 回重建框内。与全位置 clamp（Experiment F）不同：优化器仍可把
+        # 任何高斯（含这些子代）移出框，只打断"出生即框外"的放大通道。
+        if self.clamp_birth_box is not None and self._born_this_event > 0:
+            lo, hi = self.clamp_birth_box
+            with torch.no_grad():
+                self._xyz[-self._born_this_event:].clamp_(min=lo, max=hi)
 
         # torch.cuda.empty_cache()
 
         return grads
 
+    def long_axis_split(
+        self,
+        scores,
+        budget,
+        filter_mask,
+        split_distance,
+        density_reduction,
+    ):
+        """ImprovedGS 长轴分裂（LAS，移植自 XiaoBin2001/Improved-GS）。
+
+        从 filter_mask 命中的候选中按 scores 做重要性抽样（multinomial）选出
+        budget 个 parent，每个 parent 生成 2 个子代，沿其最长轴
+        ±3·d·σ_long 确定性放置（不再随机三维散射）；长轴尺度 ×(1-d)、
+        其余轴 ×√(1-d²)、密度 ×density_reduction。原版 3DGS split 无
+        尺度资格（候选由调用方给定 filter_mask）。
+        scores: [N] 1D 非负得分；filter_mask: [N] bool 候选资格。
+        返回实际分裂的 parent 数。
+        """
+        if budget <= 0 or scores.numel() == 0 or not torch.any(filter_mask):
+            return 0
+
+        padded_importance = scores.detach().float().clamp_min(0)
+        padded_importance[~filter_mask] = 0
+        positive_count = int((padded_importance > 0).sum().item())
+        if positive_count == 0:
+            return 0
+
+        budget = min(int(budget), positive_count)
+        selected_indices = torch.multinomial(
+            padded_importance, budget, replacement=False
+        )
+        selected_pts_mask = torch.zeros_like(padded_importance, dtype=torch.bool)
+        selected_pts_mask[selected_indices] = True
+
+        stds = self.get_scaling[selected_pts_mask]
+        max_values, max_indices = torch.max(stds, dim=1, keepdim=True)
+        axis_mask = torch.zeros_like(stds, dtype=torch.bool).scatter(
+            1, max_indices, True
+        )
+        axis_offsets = stds * axis_mask * 3.0 * float(split_distance)
+        axis_offsets = torch.cat([axis_offsets, -axis_offsets], dim=0)
+
+        rotation_mats = build_rotation(self._rotation[selected_pts_mask]).repeat(
+            2, 1, 1
+        )
+        parent_xyz = self.get_xyz[selected_pts_mask].repeat(2, 1)
+        new_xyz = (
+            torch.bmm(rotation_mats, axis_offsets.unsqueeze(-1)).squeeze(-1)
+            + parent_xyz
+        )
+
+        split_distance_sq = float(split_distance) * float(split_distance)
+        rate_w = max(1.0 - float(split_distance), 1e-6)
+        rate_h = math.sqrt(max(1.0 - split_distance_sq, 1e-6))
+        new_scales = (
+            stds.scatter(1, max_indices, max_values * rate_w / rate_h).repeat(2, 1)
+            * rate_h
+        )
+        new_scaling = self.scaling_inverse_activation(new_scales)
+        new_density = self.density_inverse_activation(
+            self.get_density[selected_pts_mask] * float(density_reduction)
+        ).repeat(2, 1)
+        new_rotation = self._rotation[selected_pts_mask].repeat(2, 1)
+        new_max_radii2D = self.max_radii2D[selected_pts_mask].repeat(2)
+
+        if self.event_log_enabled:
+            self.event_log.append({
+                "kind": "birth",
+                "type": "split",
+                "xyz": new_xyz.detach().cpu().numpy(),
+                "parent_xyz": parent_xyz.detach().cpu().numpy(),
+            })
+
+        self.densification_postfix(
+            new_xyz,
+            new_density,
+            new_scaling,
+            new_rotation,
+            new_max_radii2D,
+        )
+
+        prune_filter = torch.cat(
+            (
+                selected_pts_mask,
+                torch.zeros(
+                    2 * int(selected_pts_mask.sum().item()),
+                    device=selected_pts_mask.device,
+                    dtype=torch.bool,
+                ),
+            )
+        )
+        self.prune_points(prune_filter, tag="split_parent")
+        return budget
+
+    def densify_and_prune_improved(
+        self,
+        scores,
+        grad_threshold,
+        min_density,
+        budget,
+        iteration,
+        densify_until_step,
+        max_screen_size,
+        max_scale,
+        densify_scale_threshold,
+        bbox=None,
+        outside_box=None,
+        outside_budget=0.0,
+        use_las=True,
+        split_distance=0.45,
+        density_reduction=0.6,
+        late_threshold_relax=1.5,
+        eas_qualify_mask=None,
+    ):
+        """ImprovedGS 移植的预算式 densify（Growth Control + 去 clone）。
+
+        与 legacy 的差异：
+        1. 无 clone 分支（框外 clone 放大通道关闭；split 无尺度资格，小高斯
+           也有分裂入口）；
+        2. 每事件只新增 split_budget = min(budget, 候选数+N) − N 个（预算
+           由调用方按 √progress 爬坡给出）；
+        3. 候选 = 梯度≥阈值，可 OR 边缘资格 eas_qualify_mask（EAS qualify
+           模式，打冷启动边缘带的低梯度缺口）；
+        4. 得分 scores 用于候选重要性抽样（LAS 时）；None/窗口末尾回退为
+           决策梯度，窗口末尾 100 步内若未满预算阈值 ÷1.5 放宽；
+        5. 2a（框外预算）与 2b（出生 clamp）干预保持可用。
+        返回决策梯度（xyz_gradient_accum/denom，postfix 重置前），与
+        legacy densify_and_prune 一致。
+        """
+        grads = self.xyz_gradient_accum / self.denom
+        grads[grads.isnan()] = 0.0
+
+        self._densify_exclude = None
+        self._born_this_event = 0
+
+        # 2a 干预（研究用）：框外高斯数达预算比例后，本次 densify 不再选择
+        # 框外高斯（打断框外 clone/split 放大，同时保留优化器迁移出框的自由）。
+        if outside_budget > 0 and outside_box is not None:
+            xyz = self.get_xyz
+            outside = (
+                (xyz[:, 0] < outside_box[0, 0])
+                | (xyz[:, 0] > outside_box[1, 0])
+                | (xyz[:, 1] < outside_box[0, 1])
+                | (xyz[:, 1] > outside_box[1, 1])
+                | (xyz[:, 2] < outside_box[0, 2])
+                | (xyz[:, 2] > outside_box[1, 2])
+            )
+            if outside.sum() >= outside_budget * xyz.shape[0]:
+                self._densify_exclude = outside
+
+        late_densify = int(iteration) >= int(densify_until_step) - 100
+        if scores is None:
+            # 无 EAS 得分时回退决策梯度；EAS 模式下得分保持为 EAS
+            # （论文式 7 的概率权重），晚段只放宽梯度阈值、不替换得分来源。
+            scores = grads.squeeze(-1)
+        if late_densify and self.get_xyz.shape[0] < budget:
+            grad_threshold = grad_threshold / late_threshold_relax
+
+        grad_qualifiers = grads.squeeze(-1) >= grad_threshold
+        if eas_qualify_mask is not None:
+            # 兼容保留（旧 qualify-mask 语义已废弃，调用方不再传入）
+            grad_qualifiers = grad_qualifiers | eas_qualify_mask
+        if self._densify_exclude is not None:
+            grad_qualifiers = grad_qualifiers & ~self._densify_exclude
+
+        total_candidates = int(grad_qualifiers.sum().item())
+        current_points = int(self.get_xyz.shape[0])
+        current_budget = min(int(budget), total_candidates + current_points)
+        split_budget = current_budget - current_points
+        if split_budget > 0:
+            if use_las:
+                self.long_axis_split(
+                    scores,
+                    split_budget,
+                    grad_qualifiers,
+                    split_distance,
+                    density_reduction,
+                )
+            elif densify_scale_threshold:
+                # 无 LAS 的对照：原版随机 split（仍为预算式选择）
+                self.densify_and_split(
+                    grads, grad_threshold, densify_scale_threshold
+                )
+
+        # Prune gaussians with too small density；原因码: 1=density, 2=bbox, 3=screen, 4=scale
+        prune_mask = (self.get_density < min_density).squeeze()
+        reason = torch.zeros(prune_mask.shape, dtype=torch.int8,
+                             device=prune_mask.device)
+        reason[prune_mask] = 1
+        # Prune gaussians outside the bbox
+        if bbox is not None:
+            xyz = self.get_xyz
+            prune_mask_xyz = (
+                (xyz[:, 0] < bbox[0, 0])
+                | (xyz[:, 0] > bbox[1, 0])
+                | (xyz[:, 1] < bbox[0, 1])
+                | (xyz[:, 1] > bbox[1, 1])
+                | (xyz[:, 2] < bbox[0, 2])
+                | (xyz[:, 2] > bbox[1, 2])
+            )
+            reason = torch.where(prune_mask_xyz & (reason == 0),
+                                 torch.tensor(2, dtype=reason.dtype,
+                                              device=reason.device), reason)
+            prune_mask = prune_mask | prune_mask_xyz
+
+        if max_screen_size:
+            big_points_vs = self.max_radii2D > max_screen_size
+            reason = torch.where(big_points_vs & (reason == 0),
+                                 torch.tensor(3, dtype=reason.dtype,
+                                              device=reason.device), reason)
+            prune_mask = torch.logical_or(prune_mask, big_points_vs)
+        if max_scale:
+            big_points_ws = self.get_scaling.max(dim=1).values > max_scale
+            reason = torch.where(big_points_ws & (reason == 0),
+                                 torch.tensor(4, dtype=reason.dtype,
+                                              device=reason.device), reason)
+            prune_mask = torch.logical_or(prune_mask, big_points_ws)
+        self.prune_points(prune_mask, tag="prune", reasons=reason)
+
+        # 2b 干预（研究用）：本次事件出生的子代（位于张量末尾）clamp 回重建框内。
+        if self.clamp_birth_box is not None and self._born_this_event > 0:
+            lo, hi = self.clamp_birth_box
+            with torch.no_grad():
+                self._xyz[-self._born_this_event:].clamp_(min=lo, max=hi)
+
+        return grads
+
 
     def add_densification_stats(self, viewspace_point_tensor, update_filter):
-        self.xyz_gradient_accum[update_filter] += torch.norm(
-            viewspace_point_tensor.grad[update_filter, :2], dim=-1, keepdim=True
-        )
+        # ImprovedGS absolute-gradient accumulation: per-axis |dL/du| instead of
+        # the L2 norm, so each coordinate axis contributes equally (a dominant
+        # gradient on one axis is no longer diluted by a squared-norm).
+        self.xyz_gradient_accum[update_filter] += torch.abs(
+            viewspace_point_tensor.grad[update_filter, :2]
+        ).mean(dim=-1, keepdim=True)
         self.denom[update_filter] += 1
 
     def add_densification_stats_3d(self, worldspace_point_tensor, update_filter):
-        self.xyz_gradient_accum[update_filter] += torch.norm(
-            worldspace_point_tensor.grad[update_filter, :3], dim=-1, keepdim=True
-        )
+        # Same absolute-gradient convention for the 3D path (unused by the
+        # current renderer, kept consistent).
+        self.xyz_gradient_accum[update_filter] += torch.abs(
+            worldspace_point_tensor.grad[update_filter, :3]
+        ).mean(dim=-1, keepdim=True)
         self.denom[update_filter] += 1
