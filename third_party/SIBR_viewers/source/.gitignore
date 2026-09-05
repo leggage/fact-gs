@@ -22,6 +22,10 @@ hs_err_*
 # re include common public projects
 !src/projects/ulr/
 !src/projects/dataset_tools/
+!src/projects/gaussianviewer/
+!src/projects/gaussianviewer/**
+!src/projects/basic/
+!src/projects/basic/**
 
 # more vim garbage
 # Swap

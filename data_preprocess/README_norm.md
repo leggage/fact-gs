@@ -24,7 +24,12 @@ CT-PD 私有几何字段。spiral 始终生成；stitch 默认关闭，仅在配
 
 real 数据的 DSD、DSO、探测器尺寸、pitch 和每圈采样数来自投影 DICOM；YAML
 保留体素分辨率等重建设置。默认按照全部投影的 z 最小值/最大值自动更新
-`scanner.sVoxel` 和 `scanner.offOrigin`，行为由 `real.*` 配置控制。
+`scanner.sVoxel` 和 `scanner.offOrigin`，行为由 `real.*` 配置控制。若设置
+`real.auto_svoxel_from_gt: true`，则优先用 GT DICOM 的 Rows/Columns、
+PixelSpacing、切片数和切片位置计算物理重建范围，并按 `object_scale/1000` 转成
+scene 坐标；`real.auto_offorigin_from_gt` 控制是否使用 GT 切片中心更新
+`offOrigin.z`。GT 模式要求 `raw_gt` 是 DICOM 目录，或配置 `real.gt_header_dicom`
+提供只读几何 header。该模式适合投影 z 范围不能准确代表目标体积边界的真实数据。
 `scanner.offDetector` 由 DICOM `DetectorCentralElement` 与探测器几何中心
 `(N+1)/2` 的差解析得到（再除以下采样因子并乘 `dDetector`），写入
 `meta_data.json`；训练投影矩阵直接读取该字段，不再需要 Hydra
@@ -56,3 +61,9 @@ data/{real|syn}/{organ}/{spiral|stitch}/ntrain{N}/{model}/
 缩放投影与几何，对 FDK 体做非负裁剪、p99.5 归一化和 `[0, 1]` 裁剪，再从
 阈值以上体素无放回均匀采样。`init.density_threshold: auto` 对应训练默认阈值
 `0.05`；数值阈值仍受支持。
+
+两种 real volume-bound 模式不要同时理解为叠加：
+
+- `auto_svoxel_from_gt: true`：GT DICOM sampling grid 是权威范围；
+- 否则 `auto_svoxel_from_zshift: true`：用投影源轴向位移 span 推导范围；
+- `equal_xyz_span: true`：把 XYZ 三轴扩成相同最大/轴向 span；关闭时保留物理长方体。

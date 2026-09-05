@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Convert one or all FaCT-GS point_cloud.pickle snapshots for SIBR."""
 
+from __future__ import annotations
+
 import argparse
 import json
+import pickle
 import re
 import sys
 from pathlib import Path
@@ -10,11 +13,91 @@ from pathlib import Path
 import numpy as np
 import yaml
 
+# NumPy 2 checkpoints name this private module ``numpy._core.numeric`` while
+# the CUDA training environment currently ships NumPy 1.x.  The array pickle
+# representation itself is compatible.
+if not hasattr(np, "_core"):
+    import numpy.core as _numpy_core
+    import numpy.core.numeric as _numpy_core_numeric
+
+    sys.modules.setdefault("numpy._core", _numpy_core)
+    sys.modules.setdefault("numpy._core.numeric", _numpy_core_numeric)
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from fact_gs.utils.sibr_export import ensure_minimal_sibr_scene, export_sibr_ply, load_fact_gs_pickle
+
+
+def load_or_compute_densify_gradient(source: Path, training_config: Path | None):
+    """Return a per-Gaussian view-average gradient, caching recomputation."""
+    with source.open("rb") as handle:
+        snapshot = pickle.load(handle)
+    saved = snapshot.get("densify_grad")
+    if saved is not None:
+        saved = np.asarray(saved, dtype=np.float32).reshape(-1)
+        if saved.size == np.asarray(snapshot["xyz"]).shape[0]:
+            return saved, "saved_training_window"
+
+    cache = source.parent / "densify_grads_view_average.npz"
+    if cache.is_file():
+        with np.load(cache) as values:
+            gradient = np.asarray(values["grads"], dtype=np.float32).reshape(-1)
+        if gradient.size == np.asarray(snapshot["xyz"]).shape[0]:
+            return gradient, "all_train_views_cache"
+
+    if training_config is None:
+        raise SystemExit(
+            "This older snapshot has no saved densification gradient. Pass "
+            "--training-config PATH_TO/.hydra/config.yaml to recompute it."
+        )
+
+    # TIGRE must be initialized before torch-dependent scene imports on this
+    # project; keep these heavyweight imports out of density-only exports.
+    import tigre  # noqa: F401
+    from omegaconf import OmegaConf
+    from tqdm import tqdm
+
+    from fact_gs.r2_gaussian.dataset import SceneRecon
+    from fact_gs.r2_gaussian.gaussian import GaussianModel
+    from fact_gs.utils.densify_gradient import view_average_densify_gradient
+
+    config = OmegaConf.load(training_config)
+    if bool(getattr(config.optim, "use_fused_ssim", False)):
+        raise SystemExit("Post-training gradient recomputation currently requires use_fused_ssim=false")
+    scene = SceneRecon(config.model, shuffle=False)
+    model = GaussianModel()
+    model.load_ply(str(source))
+    scene.gaussians = model
+    cameras = scene.getTrainCameras()
+    bar = tqdm(total=len(cameras), desc="View-average densify gradient")
+
+    def update(done, total):
+        bar.n = done
+        bar.refresh()
+
+    try:
+        gradient, denominator = view_average_densify_gradient(
+            model,
+            cameras,
+            lambda_dssim=float(config.optim.lambda_dssim),
+            lambda_frequency=float(getattr(config.optim, "lambda_frequency", 0.0)),
+            frequency_highpass_cutoff=float(
+                getattr(config.optim, "frequency_highpass_cutoff", 0.1)
+            ),
+            progress=update,
+        )
+    finally:
+        bar.close()
+    np.savez(
+        cache,
+        grads=gradient,
+        denom=denominator,
+        kind=np.asarray("all_train_views"),
+        config=np.asarray(str(training_config)),
+    )
+    return gradient, "all_train_views"
 
 
 def load_ct_scene(data_dir: Path, geometry_path: Path | None, *, load_cameras: bool):
@@ -69,6 +152,17 @@ def main() -> None:
         "--camera-mode", choices=("orbit", "spiral"), default="orbit",
         help="orbit covers the full volume; spiral reproduces acquisition cameras",
     )
+    parser.add_argument(
+        "--color-by",
+        choices=("density", "densify-gradient"),
+        default="density",
+        help="diagnostic scalar encoded as ellipsoid pseudo-colour",
+    )
+    parser.add_argument(
+        "--training-config",
+        type=Path,
+        help="resolved Hydra config used to recompute missing densification gradients",
+    )
     args = parser.parse_args()
     if args.cameras_only and args.data is None:
         parser.error("--cameras-only requires --data")
@@ -106,9 +200,21 @@ def main() -> None:
         match = re.fullmatch(r"step_(\d+)", source.parent.name)
         step = int(match.group(1))
         values = load_fact_gs_pickle(source)
+        if args.color_by == "densify-gradient":
+            gradient, gradient_kind = load_or_compute_densify_gradient(
+                source, args.training_config
+            )
+            values["color_value"] = gradient
+            values["color_label"] = "densify_gradient"
         target = output / "point_cloud" / f"iteration_{step}" / "point_cloud.ply"
         stats = export_sibr_ply(target, **values)
-        print(f"step {step}: {stats['count']} Gaussians -> {target}")
+        suffix = (
+            f" ({gradient_kind})" if args.color_by == "densify-gradient" else ""
+        )
+        print(
+            f"step {step}: {stats['count']} Gaussians, "
+            f"colour={stats['color_label']}{suffix} -> {target}"
+        )
 
 
 if __name__ == "__main__":

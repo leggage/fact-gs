@@ -94,6 +94,28 @@ def test_missing_detector_central_element_leaves_offdetector_zero():
     assert info == {}
 
 
+def test_real_volume_bounds_are_derived_from_gt_dicom_grid():
+    scanner = {"sVoxel": [16.0, 16.0, 24.0], "offOrigin": [0.0, 0.0, 0.0]}
+    gt_info = {
+        "source_shape": [512, 512, 99],
+        "spacing_mm": [0.5859375, 0.5859375, 3.0],
+        "z_range_mm": [-317.75, -23.75],
+    }
+    cfg = {
+        "object_scale": 50,
+        "real": {"auto_svoxel_from_gt": True, "equal_xyz_span": False},
+    }
+
+    info = norm_pipeline._set_real_volume_bounds_from_gt(
+        scanner, gt_info, np.array([-16.675, -0.3275]), cfg
+    )
+
+    np.testing.assert_allclose(scanner["sVoxel"], [15.0, 15.0, 14.85])
+    np.testing.assert_allclose(scanner["offOrigin"], [0.0, 0.0, -8.5375])
+    assert info["source"] == "gt_dicom"
+    assert info["z_center_source"] == "gt_dicom_slice_positions"
+
+
 def test_intensity_initialization_normalizes_density_and_scene_coordinates():
     from fact_gs.r2_gaussian.utils.ct_utils import (
         normalize_fdk_volume,

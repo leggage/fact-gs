@@ -27,8 +27,41 @@ def test_export_sibr_ply_geometry_and_layout(tmp_path):
     np.testing.assert_allclose(rows[:, :3], xyz)
     np.testing.assert_allclose(np.exp(rows[:, 10:13]), scale)
     np.testing.assert_allclose(rows[:, 13:17], [[1, 0, 0, 0], [1, 0, 0, 0]])
+    rgb = rows[:, 6:9] * 0.28209479177387814 + 0.5
+    np.testing.assert_allclose(rgb[0], [0.05, 0.08, 0.45], atol=1e-6)
+    np.testing.assert_allclose(rgb[1], [0.75, 0.02, 0.02], atol=1e-6)
+    np.testing.assert_allclose(
+        1.0 / (1.0 + np.exp(-rows[:, 9])), [0.35, 0.35], atol=1e-6
+    )
     assert stats["count"] == 2
     assert json.loads(output.with_suffix(".json").read_text())["density_max"] == 2.0
+
+
+def test_export_sibr_ply_can_colour_by_densify_gradient(tmp_path):
+    xyz = np.zeros((3, 3), dtype=np.float32)
+    density = np.asarray([9.0, 9.0, 9.0], dtype=np.float32)
+    gradient = np.asarray([0.0, 0.5, 1.0], dtype=np.float32)
+    scale = np.ones((3, 3), dtype=np.float32)
+    rotation = np.tile([1.0, 0.0, 0.0, 0.0], (3, 1)).astype(np.float32)
+    output = tmp_path / "gradient.ply"
+
+    stats = export_sibr_ply(
+        output,
+        xyz,
+        density,
+        scale,
+        rotation,
+        color_value=gradient,
+        color_label="densify_gradient",
+        density_percentiles=(0, 100),
+    )
+    _, body = output.read_bytes().split(b"end_header\n", 1)
+    rows = np.frombuffer(body, dtype="<f4").reshape(3, len(PLY_PROPERTIES))
+    rgb = rows[:, 6:9] * 0.28209479177387814 + 0.5
+    np.testing.assert_allclose(rgb[0], [0.05, 0.08, 0.45], atol=1e-6)
+    np.testing.assert_allclose(rgb[-1], [0.75, 0.02, 0.02], atol=1e-6)
+    assert stats["color_label"] == "densify_gradient"
+    assert stats["color_max"] == 1.0
 
 
 def test_export_sibr_cameras_preserves_spiral_and_starts_from_side(tmp_path):

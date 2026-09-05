@@ -280,12 +280,28 @@ class GaussianModel:
         scale = t2a(self._scaling)
         rotation = t2a(self._rotation)
 
+        # Keep the exact view-space statistic used by densification.  Older
+        # snapshots omitted it, which made post-training diagnostic colouring
+        # impossible without rendering the training views again.
+        denom = self.denom
+        if denom.numel() == self.get_xyz.shape[0]:
+            safe_denom = torch.clamp_min(denom, 1.0)
+            densify_grad = self.xyz_gradient_accum / safe_denom
+            densify_grad = torch.where(denom > 0, densify_grad, torch.zeros_like(densify_grad))
+            densify_grad = t2a(densify_grad)
+            densify_denom = t2a(denom)
+        else:
+            densify_grad = None
+            densify_denom = None
+
         out = {
             "xyz": xyz,
             "density": densities,
             "scale": scale,
             "rotation": rotation,
             "scale_bound": self.scale_bound,
+            "densify_grad": densify_grad,
+            "densify_denom": densify_denom,
         }
         with open(path, "wb") as f:
             pickle.dump(out, f, pickle.HIGHEST_PROTOCOL)

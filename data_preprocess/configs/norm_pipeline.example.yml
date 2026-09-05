@@ -49,6 +49,14 @@ init:
   density_rescale: 0.15
 
 real:
+  # Preferred for real CT when raw_gt (or gt_header_dicom) contains reliable
+  # Rows/Columns, PixelSpacing and slice positions. This takes precedence over
+  # z-shift bounds and preserves a rectangular physical volume when
+  # equal_xyz_span=false.
+  auto_svoxel_from_gt: false
+  auto_offorigin_from_gt: true
+  # gt_header_dicom: /path/to/a/representative/gt/dicom
   auto_svoxel_from_zshift: true
+  auto_offorigin_from_zshift: true
   equal_xyz_span: true
   min_svoxel_span: 1.0e-6

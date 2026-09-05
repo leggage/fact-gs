@@ -141,16 +141,34 @@ except ValueError:
     cuda_list = re.findall(r'\d+', CUDA_VERSION)
     cuda_version = float( str(cuda_list[0] + '.' + cuda_list[1]))
 
-# Insert CUDA arguments depedning on the version
-for item in CC_COMPATIBILITY_TABLE:
-    support_begin = item[2]
-    support_end   = item[3]
-    if cuda_version < support_begin:
-        continue
-    if cuda_version >= support_end:
-        continue
-    str_arg = f"-gencode=arch=compute_{item[0]},code=sm_{item[1]}"
-    COMPUTE_CAPABILITY_ARGS.insert(0, str_arg)
+# Prefer an explicit architecture list. Besides producing much smaller wheels,
+# this avoids asking a toolkit to compile newer architectures that happen to
+# appear in the compatibility table (for example CUDA 12.8 supports sm_120 but
+# not sm_121).
+requested_arches = os.environ.get("CUDA_ARCHITECTURES") or os.environ.get(
+    "TORCH_CUDA_ARCH_LIST"
+)
+if requested_arches:
+    normalized_arches = []
+    for token in re.split(r"[;, ]+", requested_arches):
+        token = token.strip().replace("+PTX", "").replace(".", "")
+        if token:
+            normalized_arches.append(token)
+    for arch in reversed(normalized_arches):
+        COMPUTE_CAPABILITY_ARGS.insert(
+            0, f"-gencode=arch=compute_{arch},code=sm_{arch}"
+        )
+else:
+    # Insert CUDA arguments depending on the detected toolkit version.
+    for item in CC_COMPATIBILITY_TABLE:
+        support_begin = item[2]
+        support_end = item[3]
+        if cuda_version < support_begin:
+            continue
+        if cuda_version >= support_end:
+            continue
+        str_arg = f"-gencode=arch=compute_{item[0]},code=sm_{item[1]}"
+        COMPUTE_CAPABILITY_ARGS.insert(0, str_arg)
 
 
 # Obtain the numpy include directory.  This logic works across numpy versions.

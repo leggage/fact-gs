@@ -1,11 +1,11 @@
 # FaCT-GS SIBR 迁移、现状与实时监测设计
 
-本文记录 2026-09-04 当前工作区中的实际实现，目标是在一台没有安装
+本文记录 2026-09-05 仓库中的实际实现，目标是在一台没有安装
 SIBR viewer 的 Ubuntu/NVIDIA 主机上复现离线查看功能，并为后续实现实时
 训练监测保留准确的设计依据。
 
-> 重要：当前相关文件仍是工作区未提交改动。迁移前应先将本文列出的源码
-> 和 SIBR 补丁提交到版本库；不要只复制 `build/` 或 `install/`。
+> 迁移应以本仓库提交的源码为准。不要复制 `build/`、`install/` 或旧
+> `CMakeCache.txt`；这些产物绑定目标机的编译器、CUDA 和系统动态库。
 
 ## 1. 当前已经实现的功能
 
@@ -33,6 +33,8 @@ FaCT-GS Gaussian/checkpoint
 - `tools/sibr_viewer/cuda11_glibc_compat.h`：CUDA 11.8 与新 glibc 的声明冲突
   兼容头。
 - `tests/test_sibr_export.py`：验证 PLY 属性顺序、几何、scale 和 quaternion。
+- `third_party/SIBR_viewers/source/src/projects/gaussianviewer`：viewer 主程序、
+  splat/椭球 renderer、X-ray/crop 控件和 shader。
 
 ### PLY 语义（必须保持）
 
@@ -49,10 +51,10 @@ scale_0 scale_1 scale_2 rot_0 rot_1 rot_2 rot_3
 - activated positive scale 转成 `log(scale)`；SIBR 加载时会激活。
 - quaternion 保持 FaCT-GS/SIBR 使用的 `wxyz` 顺序并重新归一化。
 - raw checkpoint density 用 `softplus` 激活；内存模型读取 `get_density`。
-- density 的 1%/99% 分位归一化到 `[0.05, 1)`，再写成 opacity logit。
-- 当前 degree-0 SH 固定为白色。`_density_rgb()` 尚未接到 PLY 写出路径，
-  **当前并非蓝—红 density 伪彩色**。
-- 每个 PLY 旁边写 `point_cloud.json`，保存 Gaussian 数量、density 分位范围和
+- density 或 densification gradient 的 1%/99% 分位用于伪彩色归一化。
+- degree-0 SH 使用蓝—青—黄—红编码所选诊断量；PLY opacity 使用独立的固定
+  显示值，不把 CT density/gradient 解释成物理 opacity。
+- 每个 PLY 旁边写 `point_cloud.json`，保存 Gaussian 数量、颜色量分位范围和
   scale 范围。
 
 非摄影 CT 数据还需要导出器生成以下最小场景，供 SIBR 场景解析器使用：
@@ -119,7 +121,7 @@ tools/sibr_viewer/run_viewer.sh /absolute/path/to/model 5000
 - x86-64 Ubuntu 桌面系统，能创建 OpenGL 窗口；纯 SSH/headless 环境不能直接
   运行当前交互 GUI。
 - NVIDIA 驱动正常，`nvidia-smi` 可用。
-- CUDA toolkit。当前构建绑定 CUDA 11.8，运行依赖 `libcudart.so.11.0`。
+- CUDA toolkit。RTX 50 系显卡使用 CUDA 12.8，并以 `sm_120` 构建。
 - GPU compute capability 至少 7.0；`GaussianView` 启动时会检查。
 
 Ubuntu 系统依赖：
@@ -134,9 +136,10 @@ sudo apt install -y \
   libxxf86vm-dev libembree-dev
 ```
 
-包名会随发行版变化。当前二进制链接 Boost 1.90、OpenCV 4.10、Embree 4、
-FFmpeg 8 ABI、GLEW 2.2、GLFW 3 和 CUDA 11.8。不要把该二进制直接复制到旧版
-Ubuntu，应在目标机重新编译。
+包名会随发行版变化。2026-09-05 本机验证环境是 Ubuntu 22.04.5、CMake 3.22.1、
+GCC/G++ 11、CUDA 12.8、Boost 1.74、OpenCV 4.5 和 Embree 3.12；已安装二进制链接
+`libcudart.so.12` 和 `libembree3.so.3`。不要跨 Ubuntu/CUDA 环境搬运二进制，应在
+目标机重新编译。
 
 ### 3.2 获取准确的 SIBR 源码
 
@@ -147,14 +150,10 @@ https://gitlab.inria.fr/sibr/sibr_core.git
 commit d8856f60c5384cc1975439193bb627d77d917d77
 ```
 
-原始 3DGS checkout 中位于
-`/home/xielei/gaussian-splatting/SIBR_viewers`。当前修改版完整源码位于
-`third_party/SIBR_viewers/source`，但其中 `.git` 是复制 submodule 后遗留的相对
-gitdir 指针，在新位置无效。可靠做法二选一：
-
-1. 把 `third_party/SIBR_viewers/source` 作为普通目录连同兼容修改提交，去掉无效
-   `source/.git` 指针；或
-2. 目标机 checkout 上述固定 commit，再应用第 4 节全部修改。
+修改版完整源码已作为普通目录保存在 `third_party/SIBR_viewers/source`，其中不包含
+嵌套 `.git`。目标机 clone 本仓库即可得到构建所需源码，不需要另行 clone SIBR。
+上述 commit 用于追溯 upstream；如果重新从 upstream 制作源码树，必须重放第 4 节
+兼容补丁并加入 `basic` 与 `gaussianviewer` project。
 
 SIBR CMake 首次配置还会下载 imgui、CudaRasterizer 等 extlibs，需要网络。不要提交
 `source/extlibs/*/build`、`build*`、`install/` 或旧 `CMakeCache.txt`。
@@ -173,10 +172,10 @@ third_party/SIBR_viewers/build
 third_party/SIBR_viewers/install
 ```
 
-可用 `SIBR_SOURCE_DIR`、`SIBR_BUILD_DIR`、`SIBR_INSTALL_DIR` 覆盖。脚本目前硬编码
-主编译器 GCC/G++ 15、CUDA host compiler G++ 11，并让 NVCC 预包含
-`cuda11_glibc_compat.h`。目标机应根据 CUDA 支持矩阵选择 host compiler，不要机械
-照搬版本。编译器或 CUDA 改变时必须换一个全新 build 目录。
+可用 `SIBR_SOURCE_DIR`、`SIBR_BUILD_DIR`、`SIBR_INSTALL_DIR` 覆盖；CUDA 通过
+`CUDA_HOME` 选择，架构通过 `SIBR_CUDA_ARCHITECTURES` 选择。当前机器默认使用
+CUDA 12.8、GCC/G++ 11 和 `sm_120`。只有显式选择 CUDA 11.8 时才预包含
+`cuda11_glibc_compat.h`。编译器或 CUDA 改变时必须换一个全新 build 目录。
 
 关键 CMake 参数：
 
@@ -195,25 +194,28 @@ third_party/SIBR_viewers/install
 基于上述 commit，当前源码包含以下本地修改；重新 clone 时必须重放：
 
 1. `CMakeLists.txt`：仅在未定义时设置 `CMAKE_INSTALL_ROOT`，允许仓库内安装。
-2. `cmake/linux/dependencies.cmake`：新增默认关闭的 `SIBR_USE_EGL`；Boost 1.90
-   只请求 `filesystem;date_time`，不请求已 header-only 的 System/Chrono。
-3. Boost Filesystem 新 API：
+2. `cmake/linux/dependencies.cmake`：新增默认关闭的 `SIBR_USE_EGL`；Boost 只请求
+   `filesystem;date_time`，避免新版本中已 header-only 的 System/Chrono 组件问题。
+3. Boost Filesystem API 兼容：
    - `CameraRecorder.cpp`、`ProxyMesh.cpp`、`InteractiveCameraHandler.cpp` 改用
      `boost::filesystem::path(...).extension()`；
    - `Utils.cpp` 改用 `copy_options::overwrite_existing`。
-4. Embree 4：include 从 `embree3` 改 `embree4`，链接 `embree4`，并更新
-   `rtcIntersect*`/`rtcOccluded*` 调用签名。
+4. Embree 3.12：保持 `embree3` headers/ABI，raycaster 显式创建
+   `RTCIntersectContext`，并使用当前 `rtcIntersect*`/`rtcOccluded*` 调用签名。
 5. 新 C++ 编译器：`CommandLineArgs.hpp` 的变量模板改成 `inline constexpr`。
-6. FFmpeg 新 API：删除 `av_register_all`/`avcodec_encode_video2`，改用独立
+6. FFmpeg API 兼容：删除弃用的 `av_register_all`/`avcodec_encode_video2`，改用独立
    `AVCodecContext`、send/receive packet 和 `avcodec_parameters_from_context`。
 7. Wayland/GLEW：`Window.cpp` 将“不支持窗口定位”降为 warning，并在已有有效
    context 时容忍 `GLEW_ERROR_NO_GLX_DISPLAY`。
 8. CUDA 11.8 + glibc 2.41+：`cuda11_glibc_compat.h` 临时重命名
    `cospi/sinpi/rsqrt` 等声明，规避 exception specifier 冲突。
 
-这些修改针对当前 Ubuntu 26.04、CMake 4.2.3、GCC 15、Boost 1.90、Embree 4、
-FFmpeg 8 与 CUDA 11.8 组合。旧 Ubuntu 上有些补丁可能不需要，但 Embree/FFmpeg
-源码必须和目标机安装的 major version 一致。
+9. `projects/gaussianviewer`：加入 CT 伪彩色 PLY、真实椭球、X-ray 累加、抽样、
+   opacity/scale 和 Crop Box 控件；`projects/basic` 提供 viewer 依赖的基础 renderer。
+
+这些修改已在 Ubuntu 22.04、GCC 11、CUDA 12.8、Boost 1.74、Embree 3 和
+OpenCV 4.5 组合完成编译。其他发行版上 Embree/FFmpeg headers 与动态库的 major
+version 必须一致；CUDA architecture 必须由目标 GPU 决定。
 
 ## 5. 换机后的分层验证
 
@@ -240,7 +242,7 @@ tools/sibr_viewer/run_viewer.sh /absolute/path/to/model 5000
 ```
 
 成功标准：窗口打开、模型可见、相机可交互、`Splats`/`Ellipsoids` 可切换，终端无
-CUDA/OpenGL fatal error。density 当前表现为透明度差异，不是伪彩色。
+CUDA/OpenGL fatal error。所选诊断量表现为伪彩色，透明度仅用于显示。
 
 ## 6. 常见失败与诊断
 
@@ -257,7 +259,7 @@ CUDA/OpenGL fatal error。density 当前表现为透明度差异，不是伪彩�
   方案是升级 CUDA。
 - 修改 compiler 后仍显示旧路径：换新 build 目录，避免 CMake cache。
 - Wayland 报不支持 window position：有当前补丁时应只是 warning。
-- 模型全白：是当前设计，不是迁移失败；density 只映射 opacity。
+- 若旧快照仍然全白，请重新运行导出器；新版 PLY 用伪彩色表示所选诊断量。
 - 尺度/方向错：确认 activated scale 没被重复 `exp`，quaternion 是 `wxyz`。
 
 ## 7. 原版 3DGS Network Viewer 的工作方式
@@ -346,13 +348,12 @@ camera，但其 detector 是窄 fan 长条，只能覆盖 volume 的很小区域
 2. 当前构建关闭 `BUILD_IBR_REMOTE`，没有 Network Viewer。
 3. `train_recon.py` 没有 network server。
 4. CT 自由视角实时渲染的视觉定义及 renderer 未实现。
-5. density colormap 未接线；当前为白色 + density opacity。
-6. 每个 snapshot 独立按分位映射，跨时刻 opacity 不是同一物理标尺。
+5. density/gradient colormap 已接线；历史 PLY 需重新导出才能获得伪彩色。
+6. 每个 snapshot 独立按分位映射，跨时刻颜色不是同一绝对标尺。
 7. PLY 尚未用临时文件 + atomic rename，不可安全热加载。
-8. SIBR `source/.git` 指针复制后失效，需正规化源码/补丁管理。
-9. build 脚本有本机 GCC/CUDA 假设，尚无自动 preflight/version detection。
-10. 只有 PLY 单测，没有自动 GUI/OpenGL/CUDA smoke test。
-11. 本轮检查中当前机器 `nvidia-smi` 无法连接驱动，所以只确认 binary 存在且
+8. build 脚本默认 CUDA 12.8/GCC 11/sm_120，迁移时需显式覆盖；尚无 GPU 自动探测。
+9. 只有 PLY/相机单测，没有自动 GUI/OpenGL/CUDA smoke test。
+10. 本轮检查中当前机器 `nvidia-smi` 无法连接驱动，所以只确认 binary 存在且
     `ldd` 无缺库，不能视为本轮 GPU 运行验证。
 
 ## 12. 迁移交付清单
@@ -363,10 +364,11 @@ camera，但其 detector 是窄 fan 长条，只能覆盖 volume 的很小区域
 config/eval/eval_default.yaml
 train_recon.py
 fact_gs/utils/sibr_export.py
+fact_gs/utils/densify_gradient.py
 tests/test_sibr_export.py
 tools/sibr_viewer/{README.md,MIGRATION.md,export_fact_gs.py,run_viewer.sh,
                    build_viewer.sh,cuda11_glibc_compat.h}
-third_party/SIBR_viewers/source 的可复现来源或完整 patch
+third_party/SIBR_viewers/source（含 basic/gaussianviewer，排除 build/install）
 ```
 
 不要依赖或搬运 `build*`、`install/`、extlibs build 目录或 CMake cache。

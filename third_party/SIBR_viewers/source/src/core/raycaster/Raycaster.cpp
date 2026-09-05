@@ -3,7 +3,7 @@
  * GRAPHDECO research group, https://team.inria.fr/graphdeco
  * All rights reserved.
  *
- * This software is free for non-commercial, research and evaluation use 
+ * This software is free for non-commercial, research and evaluation use
  * under the terms of the LICENSE.md file.
  *
  * For inquiries contact sibr@inria.fr and/or George.Drettakis@inria.fr
@@ -208,7 +208,9 @@ namespace sibr
 			SIBR_ERR << "cannot initialize embree, failed cast rays." << std::endl;
 		else
 		{
-			rtcOccluded1(*_scene.get(), &ray, nullptr);
+			RTCIntersectContext context;
+			rtcInitIntersectContext(&context);
+			rtcOccluded1(*_scene.get(), &context, &ray);
 		}
 		return ray.tfar < 0.0f;
 	}
@@ -235,7 +237,9 @@ namespace sibr
 			SIBR_ERR << "cannot initialize embree, failed cast rays." << std::endl;
 		else
 		{
-			rtcOccluded8(valid8, *_scene.get(), &ray, nullptr);
+			RTCIntersectContext context;
+			rtcInitIntersectContext(&context);
+			rtcOccluded8(valid8, *_scene.get(), &context, &ray);
 		}
 
 		std::array<bool, 8> res;
@@ -268,7 +272,9 @@ namespace sibr
 			SIBR_ERR << "cannot initialize embree, failed cast rays." << std::endl;
 		else
 		{
-			rtcIntersect1(*_scene.get(), &rh, nullptr);
+			RTCIntersectContext context;
+			rtcInitIntersectContext(&context);
+			rtcIntersect1(*_scene.get(), &context, &rh);
 			rh.hit.Ng_x = -rh.hit.Ng_x; // EMBREE_FIXME: only correct for triangles,quads, and subdivision surfaces
 			rh.hit.Ng_y = -rh.hit.Ng_y;
 			rh.hit.Ng_z = -rh.hit.Ng_z;
@@ -313,7 +319,9 @@ namespace sibr
 			SIBR_ERR << "cannot initialize embree, failed cast rays." << std::endl;
 		else
 		{
-			rtcIntersect8(valid8.data(), *_scene.get(), &rh, nullptr);
+			RTCIntersectContext context;
+			rtcInitIntersectContext(&context);
+			rtcIntersect8(valid8.data(), *_scene.get(), &context, &rh);
 		}
 
 		std::array<RayHit, 8> res;
@@ -333,7 +341,7 @@ namespace sibr
 						// Considering RTC_MAX_INSTANCE_LEVEL_COUNT to be 1 (Single-level instancing); see https://www.embree.org/api.html#rtchit
 						(uint)rh.hit.primID[r] ,(uint)rh.hit.geomID[r],(uint)rh.hit.instID[0][r]
 #endif
-					
+
 					}
 				};
 		}

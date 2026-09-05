@@ -3,7 +3,7 @@
  * GRAPHDECO research group, https://team.inria.fr/graphdeco
  * All rights reserved.
  *
- * This software is free for non-commercial, research and evaluation use 
+ * This software is free for non-commercial, research and evaluation use
  * under the terms of the LICENSE.md file.
  *
  * For inquiries contact sibr@inria.fr and/or George.Drettakis@inria.fr
@@ -13,8 +13,8 @@
 #pragma once
 
 # pragma warning(push, 0)
-#  include <embree4/rtcore.h>
-#  include <embree4/rtcore_ray.h>
+#  include <embree3/rtcore.h>
+#  include <embree3/rtcore_ray.h>
 #  include <xmmintrin.h>	// functions for setting the control register
 #  include <pmmintrin.h>	// functions for setting the control register
 # pragma warning(pop)
@@ -47,7 +47,7 @@ namespace sibr
 
 		typedef	uint	geomId;
 		/// Stores a number representing an invalid geom id.
-		static const geomId InvalidGeomId; 
+		static const geomId InvalidGeomId;
 
 		/// Destructor.
 		~Raycaster( void );
@@ -93,27 +93,27 @@ namespace sibr
 		/// this cast in RayHit. To simply know if something has been hit, use RayHit::hitSomething().
 		/// \sa hitSomething
 		/// \param ray the ray to cast
-		/// \param minDist Any intersection closer than minDist from the ray origin will be ignored. Useful to avoid self intersections. 
+		/// \param minDist Any intersection closer than minDist from the ray origin will be ignored. Useful to avoid self intersections.
 		/// \return the (potential) intersection information
 		RayHit	intersect( const Ray& ray, float minDist=0.f  );
 
 		/// Launch 8 rays into the raycaster scene in an optimized fashion, reporting intersections infos.
 		/// \param inray the rays to cast
 		/// \param valid8 an indication of which of the rays should be cast
-		/// \param minDist Any intersection closer than minDist from the ray origin will be ignored. Useful to avoid self intersections. 
+		/// \param minDist Any intersection closer than minDist from the ray origin will be ignored. Useful to avoid self intersections.
 		/// \return the list of (potential) intersection informations
 		std::array<RayHit, 8>	intersect8(const std::array<Ray, 8>& inray,const std::vector<int> & valid8=std::vector<int>(8,-1), float minDist = 0.f );
 
 		/// Optimized ray-cast that only tells you if an intersection occured.
 		/// \sa intersect
 		/// \param ray the ray to cast
-		/// \param minDist Any intersection closer than minDist from the ray origin will be ignored. Useful to avoid self intersections. 
+		/// \param minDist Any intersection closer than minDist from the ray origin will be ignored. Useful to avoid self intersections.
 		/// \return true if an intersection took place
 		bool	hitSomething( const Ray& ray, float minDist=0.f );
 
 		/// Launch 8 rays into the raycaster scene in an optimized fashion, reporting if intersections occured.
 		/// \param inray the rays to cast
-		/// \param minDist Any intersection closer than minDist from the ray origin will be ignored. Useful to avoid self intersections. 
+		/// \param minDist Any intersection closer than minDist from the ray origin will be ignored. Useful to avoid self intersections.
 		/// \return a list of boolean denoting if intersections happened
 		std::array<bool, 8>	hitSomething8(const std::array<Ray, 8>& inray, float minDist = 0.f);
 
@@ -123,13 +123,13 @@ namespace sibr
 		void	disableGeom(geomId id) { rtcDisableGeometry(rtcGetGeometry((*_scene.get()),id)); rtcCommitGeometry(rtcGetGeometry(*_scene.get(),id)); rtcCommitScene(*_scene.get()); }
 
 		/// Enable geometry to start raycasting it again.
-		/// \param id the geometry to enable 
+		/// \param id the geometry to enable
 		/// \todo Untested.
 		void	enableGeom(geomId id) { rtcEnableGeometry(rtcGetGeometry((*_scene.get()),id)); rtcCommitGeometry(rtcGetGeometry(*_scene.get(),id)); rtcCommitScene(*_scene.get());}
 
 		/// Delete geometry
 		/// \param id the geometry to delete
-		void	deleteGeom(geomId id) { rtcReleaseGeometry(rtcGetGeometry((*_scene.get()),id)); rtcCommitGeometry(rtcGetGeometry(*_scene.get(),id)); rtcCommitScene(*_scene.get());} 
+		void	deleteGeom(geomId id) { rtcReleaseGeometry(rtcGetGeometry((*_scene.get()),id)); rtcCommitGeometry(rtcGetGeometry(*_scene.get(),id)); rtcCommitScene(*_scene.get());}
 
 		/// Clears internal scene..
 		void clearGeometry();
@@ -152,10 +152,10 @@ namespace sibr
 		/// \‚eturn the interpolated texture coordinates
 		static sibr::Vector2f smoothUV(const sibr::Mesh & mesh, const RayHit & hit);
 
-		/// \return true if the raycaster is initialized. 
+		/// \return true if the raycaster is initialized.
 		bool isInit() { return g_device && _scene; }
 
-	private: 
+	private:
 
 		/// Will be called by embree whenever an error occurs
 		/// \param userPtr the user data pointer
@@ -163,7 +163,7 @@ namespace sibr
 		/// \param msg additional info message.
 		static void rtcErrorCallback(void* userPtr, RTCError code, const char* msg);
 
-		
+
 		static bool g_initRegisterFlag; ///< Used to initialize flag of registers used by SSE
 		static RTCDevicePtr	g_device;	///< embree device (context for a raycaster)
 

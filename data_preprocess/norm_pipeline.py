@@ -598,23 +598,94 @@ def dataset_output_path(output_root: Path, cfg: dict, kind: str, n_train=None) -
 def _set_real_volume_bounds(scanner: dict, z_shifts: np.ndarray, cfg: dict) -> dict:
     """Port generate_data_usr.py's default real helical volume-bound logic."""
     real_cfg = cfg.get("real", {})
-    if not real_cfg.get("auto_svoxel_from_zshift", True) or not len(z_shifts):
+    if not len(z_shifts):
         return {"enabled": False}
     z_lower = float(np.min(z_shifts))
     z_upper = float(np.max(z_shifts))
     z_span = max(z_upper - z_lower, float(real_cfg.get("min_svoxel_span", 1e-6)))
     z_center = (z_lower + z_upper) / 2
-    if real_cfg.get("equal_xyz_span", True):
-        scanner["sVoxel"] = [z_span, z_span, z_span]
-    else:
-        scanner["sVoxel"][2] = z_span
-    scanner["offOrigin"][2] = z_center
+    if real_cfg.get("auto_svoxel_from_zshift", True):
+        if real_cfg.get("equal_xyz_span", True):
+            scanner["sVoxel"] = [z_span, z_span, z_span]
+        else:
+            scanner["sVoxel"][2] = z_span
+    if real_cfg.get("auto_offorigin_from_zshift", True):
+        scanner["offOrigin"][2] = z_center
     return {
-        "enabled": True,
+        "enabled": bool(real_cfg.get("auto_svoxel_from_zshift", True)),
+        "offorigin_enabled": bool(real_cfg.get("auto_offorigin_from_zshift", True)),
         "z_shift_range": [z_lower, z_upper],
         "z_span": z_span,
         "z_center": z_center,
         "equal_xyz_span": bool(real_cfg.get("equal_xyz_span", True)),
+    }
+
+
+def _set_real_volume_bounds_from_gt(
+    scanner: dict, gt_info: dict, z_shifts: np.ndarray, cfg: dict
+) -> dict:
+    """Set the reconstruction box from the physical GT DICOM sampling grid.
+
+    ``load_gt_dicom`` and ``_header_only_geometry`` expose the source array as
+    ``[rows, columns, slices]`` and DICOM spacing as
+    ``[row, column, slice]`` in millimetres.  Scanner metadata uses xyz order,
+    so the first two axes must be swapped.  Use the full sampled extent
+    (number of samples times sample spacing), rather than copying the fallback
+    values from the YAML file.
+
+    The DICOM slice positions and the real projection ``z_shift`` values share
+    the same patient-z origin after ``load_real_projections`` applies its
+    established sign convention.  Prefer the measured slice-centre midpoint
+    for ``offOrigin.z`` and retain the projection midpoint only as a fallback.
+    """
+    real_cfg = cfg.get("real", {})
+    shape = np.asarray(gt_info.get("source_shape", []), dtype=np.float64)
+    spacing_mm = np.asarray(gt_info.get("spacing_mm", []), dtype=np.float64)
+    if shape.shape != (3,) or spacing_mm.shape != (3,):
+        raise ValueError(
+            "real.auto_svoxel_from_gt=true requires GT DICOM source_shape and "
+            "spacing_mm metadata; use raw_gt DICOM or real.gt_header_dicom"
+        )
+    if np.any(shape <= 0) or np.any(spacing_mm <= 0):
+        raise ValueError(
+            f"Invalid GT DICOM sampling grid: shape={shape.tolist()}, "
+            f"spacing_mm={spacing_mm.tolist()}"
+        )
+
+    mm_to_scene = float(cfg["object_scale"]) / 1000.0
+    extent_mm = np.asarray(
+        [shape[1] * spacing_mm[1], shape[0] * spacing_mm[0], shape[2] * spacing_mm[2]],
+        dtype=np.float64,
+    )
+    extent_scene = extent_mm * mm_to_scene
+    if real_cfg.get("equal_xyz_span", False):
+        extent_scene[:] = float(np.max(extent_scene))
+    scanner["sVoxel"] = extent_scene.tolist()
+
+    z_range_mm = np.asarray(gt_info.get("z_range_mm", []), dtype=np.float64)
+    center_source = "projection_z_shift"
+    if z_range_mm.shape == (2,) and np.isfinite(z_range_mm).all():
+        z_center = float(np.mean(z_range_mm) * mm_to_scene)
+        center_source = "gt_dicom_slice_positions"
+    elif len(z_shifts):
+        z_center = float((np.min(z_shifts) + np.max(z_shifts)) / 2.0)
+    else:
+        z_center = float(scanner.get("offOrigin", [0, 0, 0])[2])
+        center_source = "scanner_fallback"
+    if real_cfg.get("auto_offorigin_from_gt", True):
+        scanner["offOrigin"][2] = z_center
+
+    return {
+        "enabled": True,
+        "source": "gt_dicom",
+        "source_shape": shape.astype(int).tolist(),
+        "spacing_mm": spacing_mm.tolist(),
+        "extent_mm": extent_mm.tolist(),
+        "sVoxel": scanner["sVoxel"],
+        "offorigin_enabled": bool(real_cfg.get("auto_offorigin_from_gt", True)),
+        "z_center": z_center,
+        "z_center_source": center_source,
+        "equal_xyz_span": bool(real_cfg.get("equal_xyz_span", False)),
     }
 
 

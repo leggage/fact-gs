@@ -5,10 +5,8 @@ import os.path as osp
 import json
 import torch
 import pickle
-import tifffile
 
 sys.path.append("./")
-from fact_gs.utils.vol_utils import normalize_volume
 
 mode_id = {
     "parallel": 0,
@@ -86,6 +84,9 @@ def readBlenderInfo(path, eval, geometry_cfg=None):
     if vol_path.endswith(".npy"):
         vol_gt = torch.from_numpy(np.load(vol_path)).float().cuda()
     elif vol_path.endswith(".tiff") or vol_path.endswith(".tif"):
+        import tifffile
+        from fact_gs.utils.vol_utils import normalize_volume
+
         vol_gt = normalize_volume(tifffile.imread(vol_path))[0]
         vol_gt = torch.from_numpy(vol_gt).float().cuda()
 
@@ -442,6 +443,9 @@ def readVolInfoBlender(path, file_name="vol_prior"):
     if vol_path.endswith(".npy"):
         vol_gt = torch.from_numpy(np.load(vol_path)).float().cuda()
     elif vol_path.endswith(".tiff") or vol_path.endswith(".tif"):
+        import tifffile
+        from fact_gs.utils.vol_utils import normalize_volume
+
         vol_gt = normalize_volume(tifffile.imread(vol_path))[0]
         vol_gt = torch.from_numpy(vol_gt).float().cuda()
 

@@ -8,18 +8,22 @@
 #
 # For inquiries contact  george.drettakis@inria.fr
 #
+from __future__ import annotations
+
 import sys
 import random
 import numpy as np
 import os.path as osp
 import torch
-import tifffile
+from typing import TYPE_CHECKING
 
 sys.path.append("./")
-from fact_gs.r2_gaussian.gaussian import GaussianModel
 from fact_gs.r2_gaussian.dataset.dataset_readers import sceneLoadTypeCallbacks
 from fact_gs.r2_gaussian.utils.camera_utils import cameraList_from_camInfos
 from fact_gs.r2_gaussian.utils.general_utils import t2a
+
+if TYPE_CHECKING:
+    from fact_gs.r2_gaussian.gaussian import GaussianModel
 
 
 class SceneRecon:
@@ -97,6 +101,8 @@ class SceneRecon:
                     t2a(vol_pred),
                 )
             elif vol_format == "tiff":
+                import tifffile
+
                 tifffile.imwrite(osp.join(point_cloud_path, "vol_pred.tiff"), t2a(vol_pred))
 
     def getTrainCameras(self):
@@ -161,4 +167,6 @@ class SceneVol:
                     t2a(vol_pred),
                 )
             elif vol_format == "tiff":
+                import tifffile
+
                 tifffile.imwrite(osp.join(point_cloud_path, "vol_pred.tiff"), t2a(vol_pred))

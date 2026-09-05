@@ -1,8 +1,9 @@
-"""Export FaCT-GS density Gaussians in the Graphdeco SIBR PLY layout.
+"""Export FaCT-GS Gaussians in the Graphdeco SIBR PLY layout.
 
-SIBR expects opacity and spherical-harmonic colour, while CT Gaussians carry a
-positive attenuation density. This module keeps geometry exact, uses neutral
-white degree-0 SH colour, and maps density only to opacity.
+SIBR expects opacity and spherical-harmonic colour, while CT Gaussians carry
+neither intrinsic RGB colour nor a view-independent opacity.  A selected CT
+diagnostic scalar is encoded as pseudo-colour; opacity remains an independent,
+constant display setting.
 """
 
 from __future__ import annotations
@@ -43,8 +44,10 @@ def export_sibr_ply(
     scale: np.ndarray,
     rotation: np.ndarray,
     *,
+    color_value: np.ndarray | None = None,
+    color_label: str = "density",
     density_percentiles: tuple[float, float] = (1.0, 99.0),
-    opacity_floor: float = 0.05,
+    display_opacity: float = 0.35,
 ) -> dict:
     """Write a degree-0 binary PLY accepted by ``SIBR_gaussianViewer_app``.
 
@@ -63,17 +66,23 @@ def export_sibr_ply(
     if n == 0:
         raise ValueError("cannot export an empty Gaussian model")
 
-    finite = np.isfinite(density)
+    if color_value is None:
+        color_value = density
+    color_value = np.asarray(color_value, dtype=np.float32).reshape(-1)
+    if color_value.size != n:
+        raise ValueError("color_value and xyz lengths differ")
+
+    finite = np.isfinite(color_value)
     if not finite.any():
-        raise ValueError("density contains no finite values")
-    low, high = np.percentile(density[finite], density_percentiles).astype(float)
+        raise ValueError("color_value contains no finite values")
+    low, high = np.percentile(color_value[finite], density_percentiles).astype(float)
     if high <= low:
         high = low + max(abs(low), 1.0) * 1e-6
-    norm = np.clip((density - low) / (high - low), 0.0, 1.0)
-    # CT has no intrinsic RGB colour; carry density exclusively by opacity.
-    rgb = np.ones((n, 3), dtype=np.float32)
+    # CT has no intrinsic RGB colour. Encode the requested diagnostic scalar
+    # only as colour. It must not be treated as physical opacity.
+    rgb = _density_rgb(color_value, low, high)
     sh_dc = (rgb - 0.5) / SH_C0
-    opacity = np.clip(opacity_floor + (1.0 - opacity_floor) * norm, 1e-6, 1.0 - 1e-6)
+    opacity = np.full(n, np.clip(display_opacity, 1e-6, 1.0 - 1e-6), dtype=np.float32)
     opacity_logit = np.log(opacity / (1.0 - opacity))
     log_scale = np.log(np.maximum(scale, np.finfo(np.float32).tiny))
     quat_norm = np.linalg.norm(rotation, axis=1, keepdims=True)
@@ -84,7 +93,7 @@ def export_sibr_ply(
     ).astype("<f4", copy=False)
     header = ["ply", "format binary_little_endian 1.0", f"element vertex {n}"]
     header.extend(f"property float {name}" for name in PLY_PROPERTIES)
-    header.extend(["comment fact_gs_color density", "end_header"])
+    header.extend([f"comment fact_gs_color {color_label}", "end_header"])
     with path.open("wb") as handle:
         handle.write(("\n".join(header) + "\n").encode("ascii"))
         handle.write(rows.tobytes(order="C"))
@@ -93,8 +102,12 @@ def export_sibr_ply(
         "count": n,
         "density_min": float(np.nanmin(density)),
         "density_max": float(np.nanmax(density)),
-        "density_color_low": low,
-        "density_color_high": high,
+        "color_label": str(color_label),
+        "color_min": float(np.nanmin(color_value)),
+        "color_max": float(np.nanmax(color_value)),
+        "color_low": low,
+        "color_high": high,
+        "display_opacity": float(opacity[0]),
         "scale_min": np.nanmin(scale, axis=0).astype(float).tolist(),
         "scale_max": np.nanmax(scale, axis=0).astype(float).tolist(),
     }
@@ -220,6 +233,8 @@ def export_gaussian_model(
     viewer_bbox=None,
     viewer_orbit_radius: float | None = None,
     viewer_camera_mode: str = "orbit",
+    color_value=None,
+    color_label: str = "density",
 ) -> dict:
     """Export an in-memory :class:`GaussianModel` as one SIBR iteration."""
     target = Path(model_path) / "sibr" / "point_cloud" / f"iteration_{int(step)}" / "point_cloud.ply"
@@ -230,6 +245,8 @@ def export_gaussian_model(
         to_numpy(model.get_density),
         to_numpy(model.get_scaling),
         to_numpy(model.get_rotation),
+        color_value=(to_numpy(color_value) if color_value is not None else None),
+        color_label=color_label,
     )
     ensure_minimal_sibr_scene(
         Path(model_path) / "sibr",

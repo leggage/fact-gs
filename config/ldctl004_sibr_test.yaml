@@ -1,0 +1,31 @@
+hydra:
+  job:
+    chdir: false
+
+defaults:
+  - model: model_default_recon
+  - optim: optim_default_recon
+  - eval: eval_default
+  - profile: profile_no
+  - tensorboard: default
+  - _self_
+
+# Real ldctl004, 1000-view, cold-start SIBR migration test.
+model:
+  data_source_path: data/real/ldctl004/spiral/ntrain1000/r2gs_sibr_test
+  model_path: models/real/ldctl004/spiral/ntrain1000/factgs_sibr_cold_g4_outside
+  # Cold start: consume the dataset-generated FDK foreground point cloud and
+  # never load a fitted Gaussian prior.
+  init_mode: precomputed
+  prior_path: ""
+
+optim:
+  densification_method: improved
+  use_las: true
+  eas_use: "off"
+  outside_gaussian_budget: 0.1
+
+eval:
+  sibr_export: true
+  sibr_export_interval: 1000
+  sibr_camera_mode: orbit

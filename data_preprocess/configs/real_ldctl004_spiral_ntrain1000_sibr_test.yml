@@ -1,0 +1,59 @@
+# Local real-data fixture used by the SIBR viewer migration smoke test.
+# Paths intentionally point at the raw spiral_ct_dataset checkout on this host.
+dataset_type: real
+organ: ldctl004
+model: r2gs_sibr_test
+raw_gt: /home/xielei/spiral_ct_dataset/ldctl004/1.000000-Full Dose Images-63186
+raw_proj: /home/xielei/spiral_ct_dataset/ldctl004/1.000000-Full dose projections-24362
+gt_xy_invert: false
+output_root: data
+n_train: 1000
+n_test: 1500
+seed: 0
+
+stitch:
+  enabled: false
+  n_train: 100
+  n_test: 100
+
+object_scale: 50
+proj_rescale: 400
+# Keep the native 64x736 detector resolution from the projection DICOM.
+proj_subsample: 1
+
+scanner:
+  mode: cone
+  DSD: 47.2
+  DSO: 26.9260009765625
+  nDetector: [64, 888]
+  sDetector: [3.2764801, 45.4611614]
+  nVoxel: [256, 256, 256]
+  # Fallback only; real.auto_svoxel_from_gt replaces this from GT DICOM.
+  sVoxel: [16.0, 16.0, 24.0]
+  offOrigin: [0, 0, 0]
+  offDetector: [0, 0]
+  accuracy: 0.5
+  coord_left: true
+  filter: null
+  noise: false
+  possion_noise: 100000
+  gaussian_noise: [0, 10]
+
+spiral:
+  z_start: -12
+  z_end: 12
+  pitch: 0.9844
+  sample_per_rotation: 984
+  angle_start: 0
+
+init:
+  n_points: 50000
+  density_threshold: auto
+  density_rescale: 0.15
+
+real:
+  # Derive the physical reconstruction box from Rows/Columns, PixelSpacing,
+  # and the measured slice positions in raw_gt DICOM.
+  auto_svoxel_from_gt: true
+  auto_offorigin_from_gt: true
+  equal_xyz_span: false
