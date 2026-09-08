@@ -16,12 +16,14 @@ import yaml
 # NumPy 2 checkpoints name this private module ``numpy._core.numeric`` while
 # the CUDA training environment currently ships NumPy 1.x.  The array pickle
 # representation itself is compatible.
+_NUMPY_COMPAT_MODULES = ()
 if not hasattr(np, "_core"):
     import numpy.core as _numpy_core
     import numpy.core.numeric as _numpy_core_numeric
 
     sys.modules.setdefault("numpy._core", _numpy_core)
     sys.modules.setdefault("numpy._core.numeric", _numpy_core_numeric)
+    _NUMPY_COMPAT_MODULES = ("numpy._core.numeric", "numpy._core")
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
@@ -52,6 +54,12 @@ def load_or_compute_densify_gradient(source: Path, training_config: Path | None)
             "This older snapshot has no saved densification gradient. Pass "
             "--training-config PATH_TO/.hydra/config.yaml to recompute it."
         )
+
+    # The temporary NumPy-2 pickle aliases confuse TIGRE's Cython extension
+    # when running under NumPy 1.x. The checkpoint has been decoded already,
+    # so remove only the aliases installed by this script before importing it.
+    for module_name in _NUMPY_COMPAT_MODULES:
+        sys.modules.pop(module_name, None)
 
     # TIGRE must be initialized before torch-dependent scene imports on this
     # project; keep these heavyweight imports out of density-only exports.
@@ -163,6 +171,11 @@ def main() -> None:
         type=Path,
         help="resolved Hydra config used to recompute missing densification gradients",
     )
+    parser.add_argument(
+        "--gradient-threshold",
+        type=float,
+        help="recommended raw gradient cutoff (defaults to training config value)",
+    )
     args = parser.parse_args()
     if args.cameras_only and args.data is None:
         parser.error("--cameras-only requires --data")
@@ -206,6 +219,14 @@ def main() -> None:
             )
             values["color_value"] = gradient
             values["color_label"] = "densify_gradient"
+            gradient_threshold = args.gradient_threshold
+            if gradient_threshold is None and args.training_config is not None:
+                with args.training_config.open("r", encoding="utf-8") as handle:
+                    resolved_config = yaml.safe_load(handle) or {}
+                gradient_threshold = resolved_config.get("optim", {}).get(
+                    "densify_grad_threshold"
+                )
+            values["filter_threshold"] = gradient_threshold
         target = output / "point_cloud" / f"iteration_{step}" / "point_cloud.ply"
         stats = export_sibr_ply(target, **values)
         suffix = (

@@ -123,6 +123,13 @@ namespace sibr {
 		float _ellipsoidAlphaMax = 1.0f;
 		float _ellipsoidOpacityScale = 0.15f;
 		bool _ellipsoidXray = true;
+		bool _diagnosticFilterAvailable = false;
+		bool _diagnosticFilterEnabled = false;
+		float _diagnosticFilterMin = 0.0f;
+		float _diagnosticFilterMax = 1.0f;
+		float _diagnosticDataMin = 0.0f;
+		float _diagnosticDataMax = 1.0f;
+		std::string _diagnosticLabel = "diagnostic";
 		GaussianData* gData;
 
 		bool _interop_failed = false;

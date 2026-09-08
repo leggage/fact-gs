@@ -15,6 +15,8 @@
 #include <boost/asio.hpp>
 #include <rasterizer.h>
 #include <imgui_internal.h>
+#include <cstring>
+#include <limits>
 
 // Define the types and sizes that make up the contents of each Gaussian
 // in the trained model.
@@ -73,8 +75,14 @@ int loadPly(const char* filename,
 	std::vector<float>& opacities,
 	std::vector<Scale>& scales,
 	std::vector<Rot>& rot,
+	std::vector<float>& filterValues,
 	sibr::Vector3f& minn,
-	sibr::Vector3f& maxx)
+	sibr::Vector3f& maxx,
+	bool& filterAvailable,
+	std::string& filterLabel,
+	float& filterMin,
+	float& filterMax,
+	float& recommendedFilterMin)
 {
 	std::ifstream infile(filename, std::ios_base::binary);
 
@@ -95,13 +103,41 @@ int loadPly(const char* filename,
 	// Output number of Gaussians contained
 	SIBR_LOG << "Loading " << count << " Gaussian splats" << std::endl;
 
-	while (std::getline(infile, buff))
+	while (std::getline(infile, buff)) {
+		const std::string colorPrefix = "comment fact_gs_color ";
+		if (buff.compare(0, colorPrefix.size(), colorPrefix) == 0)
+			filterLabel = buff.substr(colorPrefix.size());
 		if (buff.compare("end_header") == 0)
 			break;
+	}
 
 	// Read all Gaussians at once (AoS)
 	std::vector<RichPoint<D>> points(count);
 	infile.read((char*)points.data(), count * sizeof(RichPoint<D>));
+
+	// Optional FaCT-GS sidecar: raw diagnostic values are deliberately kept
+	// separate from PLY opacity and pseudo-colour so both GUI filters can work
+	// independently. Layout: magic[8], uint64 count, float threshold, float[count].
+	std::vector<float> inputFilter(count, 0.0f);
+	std::string filterPath(filename);
+	const size_t extension = filterPath.rfind(".ply");
+	if (extension != std::string::npos)
+		filterPath.replace(extension, 4, ".filter.bin");
+	std::ifstream filterFile(filterPath, std::ios_base::binary);
+	if (filterFile.good()) {
+		char magic[8] = {};
+		uint64_t filterCount = 0;
+		float recommended = std::numeric_limits<float>::quiet_NaN();
+		filterFile.read(magic, sizeof(magic));
+		filterFile.read(reinterpret_cast<char*>(&filterCount), sizeof(filterCount));
+		filterFile.read(reinterpret_cast<char*>(&recommended), sizeof(recommended));
+		if (std::memcmp(magic, "FGSFILT1", 8) == 0 && filterCount == uint64_t(count)) {
+			filterFile.read(reinterpret_cast<char*>(inputFilter.data()), count * sizeof(float));
+			filterAvailable = filterFile.good();
+			if (filterAvailable && std::isfinite(recommended))
+				recommendedFilterMin = recommended;
+		}
+	}
 
 	// Resize our SoA data
 	pos.resize(count);
@@ -109,6 +145,7 @@ int loadPly(const char* filename,
 	scales.resize(count);
 	rot.resize(count);
 	opacities.resize(count);
+	filterValues.resize(count);
 
 	// Gaussians are done training, they won't move anymore. Arrange
 	// them according to 3D Morton order. This means better cache
@@ -164,6 +201,7 @@ int loadPly(const char* filename,
 
 		// Activate alpha
 		opacities[k] = sigmoid(points[i].opacity);
+		filterValues[k] = inputFilter[i];
 
 		shs[k].shs[0] = points[i].shs.shs[0];
 		shs[k].shs[1] = points[i].shs.shs[1];
@@ -174,6 +212,13 @@ int loadPly(const char* filename,
 			shs[k].shs[j * 3 + 1] = points[i].shs.shs[(j - 1) + SH_N + 2];
 			shs[k].shs[j * 3 + 2] = points[i].shs.shs[(j - 1) + 2 * SH_N + 1];
 		}
+	}
+	if (filterAvailable) {
+		auto range = std::minmax_element(filterValues.begin(), filterValues.end());
+		filterMin = *range.first;
+		filterMax = *range.second;
+		SIBR_LOG << "Loaded " << filterLabel << " filter values [" << filterMin
+			<< ", " << filterMax << "] from " << filterPath << std::endl;
 	}
 	return count;
 }
@@ -359,23 +404,28 @@ sibr::GaussianView::GaussianView(const sibr::BasicIBRScene::Ptr & ibrScene, uint
 	std::vector<Rot> rot;
 	std::vector<Scale> scale;
 	std::vector<float> opacity;
+	std::vector<float> filterValues;
 	std::vector<SHs<3>> shs;
+	float recommendedFilterMin = std::numeric_limits<float>::quiet_NaN();
 	if (sh_degree == 0)
 	{
-		count = loadPly<0>(file, pos, shs, opacity, scale, rot, _scenemin, _scenemax);
+		count = loadPly<0>(file, pos, shs, opacity, scale, rot, filterValues, _scenemin, _scenemax, _diagnosticFilterAvailable, _diagnosticLabel, _diagnosticDataMin, _diagnosticDataMax, recommendedFilterMin);
 	}
 	else if (sh_degree == 1)
 	{
-		count = loadPly<1>(file, pos, shs, opacity, scale, rot, _scenemin, _scenemax);
+		count = loadPly<1>(file, pos, shs, opacity, scale, rot, filterValues, _scenemin, _scenemax, _diagnosticFilterAvailable, _diagnosticLabel, _diagnosticDataMin, _diagnosticDataMax, recommendedFilterMin);
 	}
 	else if (sh_degree == 2)
 	{
-		count = loadPly<2>(file, pos, shs, opacity, scale, rot, _scenemin, _scenemax);
+		count = loadPly<2>(file, pos, shs, opacity, scale, rot, filterValues, _scenemin, _scenemax, _diagnosticFilterAvailable, _diagnosticLabel, _diagnosticDataMin, _diagnosticDataMax, recommendedFilterMin);
 	}
 	else if (sh_degree == 3)
 	{
-		count = loadPly<3>(file, pos, shs, opacity, scale, rot, _scenemin, _scenemax);
+		count = loadPly<3>(file, pos, shs, opacity, scale, rot, filterValues, _scenemin, _scenemax, _diagnosticFilterAvailable, _diagnosticLabel, _diagnosticDataMin, _diagnosticDataMax, recommendedFilterMin);
 	}
+	_diagnosticFilterMin = std::isfinite(recommendedFilterMin) ? recommendedFilterMin : _diagnosticDataMin;
+	_diagnosticFilterMax = _diagnosticDataMax;
+	_diagnosticFilterEnabled = _diagnosticFilterAvailable && std::isfinite(recommendedFilterMin);
 
 	_boxmin = _scenemin;
 	_boxmax = _scenemax;
@@ -409,7 +459,8 @@ sibr::GaussianView::GaussianView(const sibr::BasicIBRScene::Ptr & ibrScene, uint
 		(float*)rot.data(),
 		(float*)scale.data(),
 		opacity.data(),
-		(float*)shs.data());
+		(float*)shs.data(),
+		filterValues.data());
 
 	_gaussianRenderer = new GaussianSurfaceRenderer();
 
@@ -461,7 +512,8 @@ void sibr::GaussianView::onRenderIBR(sibr::IRenderTarget & dst, const sibr::Came
 			count, *gData, eye, dst, _ellipsoidAlphaLimit,
 			_ellipsoidAlphaMin, _ellipsoidAlphaMax, _ellipsoidOpacityScale,
 			_ellipsoidScaleModifier, _ellipsoidStride, _cropping,
-			_boxmin, _boxmax, _ellipsoidXray);
+			_boxmin, _boxmax, _ellipsoidXray,
+			_diagnosticFilterEnabled, _diagnosticFilterMin, _diagnosticFilterMax);
 	}
 	else if (currMode == "Initial Points")
 	{
@@ -590,6 +642,29 @@ void sibr::GaussianView::onGUI()
 			ImGui::SliderFloat("Solid Threshold", &_ellipsoidAlphaLimit, 0.0f, 1.0f);
 		if (_ellipsoidAlphaMin > _ellipsoidAlphaMax)
 			std::swap(_ellipsoidAlphaMin, _ellipsoidAlphaMax);
+		ImGui::Separator();
+		if (_diagnosticFilterAvailable)
+		{
+			ImGui::Text("Filter value: %s [%.3e, %.3e]",
+				_diagnosticLabel.c_str(), _diagnosticDataMin, _diagnosticDataMax);
+			ImGui::Checkbox("Filter by diagnostic value", &_diagnosticFilterEnabled);
+			if (_diagnosticFilterEnabled)
+			{
+				const char* minLabel = _diagnosticLabel == "densify_gradient" ? "Gradient Min" : "Value Min";
+				const char* maxLabel = _diagnosticLabel == "densify_gradient" ? "Gradient Max" : "Value Max";
+				ImGui::SliderFloat(minLabel, &_diagnosticFilterMin,
+					_diagnosticDataMin, _diagnosticDataMax, "%.3e", 3.0f);
+				ImGui::SliderFloat(maxLabel, &_diagnosticFilterMax,
+					_diagnosticDataMin, _diagnosticDataMax, "%.3e", 3.0f);
+				if (_diagnosticFilterMin > _diagnosticFilterMax)
+					std::swap(_diagnosticFilterMin, _diagnosticFilterMax);
+			}
+			ImGui::Text("Opacity controls remain independent; both filters are ANDed.");
+		}
+		else
+		{
+			ImGui::Text("No diagnostic sidecar; re-export this iteration.");
+		}
 	}
 	ImGui::Checkbox("Fast culling", &_fastCulling);
 	ImGui::Checkbox("Antialiasing", &_antialiasing);

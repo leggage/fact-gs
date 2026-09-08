@@ -141,6 +141,9 @@ rasterizer，目前要求训练配置 `optim.use_fused_ssim=false`。
 
 不同 snapshot 默认分别按自身 1%/99% 分位归一化，因此颜色适合观察单帧空间分布，
 不代表跨 step 的同一绝对数值标尺。精确范围见相邻 `point_cloud.json`。
+梯度导出还会生成原始 float32 sidecar `point_cloud.filter.bin`；它不会改变标准 PLY，
+但更新后的 viewer 会读取它并按绝对梯度筛选。默认下限取训练配置中的
+`optim.densify_grad_threshold`，也可用 `--gradient-threshold` 显式覆盖。
 
 ## 6. 查看相机
 
@@ -200,10 +203,15 @@ python train_recon.py \
 - `Display every Nth`：只画每 N 个椭球，默认 10，用于控制交互帧率；
 - `Ellipsoid Scale`：仅改变显示尺寸，不修改模型；
 - `Opacity Min/Max`、`Opacity Strength`：调整椭球显示透明度；
+- `Filter by diagnostic value`、`Gradient Min/Max`：按原始 densification 梯度值筛选；
+  梯度下限默认是训练时的 densification 阈值；
 - `Crop Box`：启用后分别调整 XYZ min/max，裁出关注区域；
 - `Scaling Modifier`：控制 splat 的可视尺度。
 
 若模型看似全白，请确认 PLY 是用当前导出器重新生成的；旧版本曾固定输出白色。
+梯度筛选、opacity 筛选和 Crop Box 是三套独立条件，同时启用时取交集，不会互相
+改写参数。取消 `Filter by diagnostic value` 即可显示全部梯度范围，而 opacity 控件
+仍按原行为工作。
 
 ## 9. 输出格式
 
@@ -214,6 +222,7 @@ MODEL/sibr/
 ├── point_cloud/
 │   └── iteration_<N>/
 │       ├── point_cloud.ply
+│       ├── point_cloud.filter.bin  # 可选：原始梯度/诊断值和推荐阈值
 │       └── point_cloud.json
 └── viewer_scene/
     ├── cameras.json

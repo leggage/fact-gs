@@ -174,8 +174,8 @@ third_party/SIBR_viewers/install
 
 可用 `SIBR_SOURCE_DIR`、`SIBR_BUILD_DIR`、`SIBR_INSTALL_DIR` 覆盖；CUDA 通过
 `CUDA_HOME` 选择，架构通过 `SIBR_CUDA_ARCHITECTURES` 选择。当前机器默认使用
-CUDA 12.8、GCC/G++ 11 和 `sm_120`。只有显式选择 CUDA 11.8 时才预包含
-`cuda11_glibc_compat.h`。编译器或 CUDA 改变时必须换一个全新 build 目录。
+CUDA 12.8 和 `sm_120`。Embree 4 系统优先选择 GCC/G++ 15，其余系统回退 GCC/G++
+11；均可用 `CC`、`CXX` 覆盖。编译器或 CUDA 改变时必须换一个全新 build 目录。
 
 关键 CMake 参数：
 
@@ -207,11 +207,14 @@ CUDA 12.8、GCC/G++ 11 和 `sm_120`。只有显式选择 CUDA 11.8 时才预包�
    `AVCodecContext`、send/receive packet 和 `avcodec_parameters_from_context`。
 7. Wayland/GLEW：`Window.cpp` 将“不支持窗口定位”降为 warning，并在已有有效
    context 时容忍 `GLEW_ERROR_NO_GLX_DISPLAY`。
-8. CUDA 11.8 + glibc 2.41+：`cuda11_glibc_compat.h` 临时重命名
-   `cospi/sinpi/rsqrt` 等声明，规避 exception specifier 冲突。
+8. CUDA 11.8 + glibc 2.41+：CMake 探测 nvcc 时临时关闭 `_GNU_SOURCE`；若安装目录
+   已有 `libCudaRasterizer.a`，后续重编 viewer 会复用它，避免再次触发旧 CUDA
+   header 冲突。全新主机优先使用 CUDA 12；也可通过
+   `SIBR_CUDA_RASTERIZER_PREBUILT` 指定已编译静态库。
 
 9. `projects/gaussianviewer`：加入 CT 伪彩色 PLY、真实椭球、X-ray 累加、抽样、
-   opacity/scale 和 Crop Box 控件；`projects/basic` 提供 viewer 依赖的基础 renderer。
+   opacity/scale 和 Crop Box 控件；额外读取 `point_cloud.filter.bin`，用原始梯度值
+   独立筛选 Gaussian。梯度、opacity、Crop Box 同时启用时按 AND 组合。
 
 这些修改已在 Ubuntu 22.04、GCC 11、CUDA 12.8、Boost 1.74、Embree 3 和
 OpenCV 4.5 组合完成编译。其他发行版上 Embree/FFmpeg headers 与动态库的 major

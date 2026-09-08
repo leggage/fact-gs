@@ -1,5 +1,6 @@
 import json
 import numpy as np
+import struct
 from types import SimpleNamespace
 
 from fact_gs.r2_gaussian.dataset.dataset_readers import angle2pose
@@ -54,6 +55,7 @@ def test_export_sibr_ply_can_colour_by_densify_gradient(tmp_path):
         color_value=gradient,
         color_label="densify_gradient",
         density_percentiles=(0, 100),
+        filter_threshold=0.5,
     )
     _, body = output.read_bytes().split(b"end_header\n", 1)
     rows = np.frombuffer(body, dtype="<f4").reshape(3, len(PLY_PROPERTIES))
@@ -62,6 +64,12 @@ def test_export_sibr_ply_can_colour_by_densify_gradient(tmp_path):
     np.testing.assert_allclose(rgb[-1], [0.75, 0.02, 0.02], atol=1e-6)
     assert stats["color_label"] == "densify_gradient"
     assert stats["color_max"] == 1.0
+    sidecar = output.with_suffix(".filter.bin").read_bytes()
+    magic, count, threshold = struct.unpack("<8sQf", sidecar[:20])
+    assert magic == b"FGSFILT1"
+    assert count == 3
+    assert threshold == 0.5
+    np.testing.assert_allclose(np.frombuffer(sidecar[20:], dtype="<f4"), gradient)
 
 
 def test_export_sibr_cameras_preserves_spiral_and_starts_from_side(tmp_path):

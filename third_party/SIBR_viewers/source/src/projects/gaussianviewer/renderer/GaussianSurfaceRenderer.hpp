@@ -29,7 +29,7 @@ namespace sibr {
 	public:
 
 		/// Constructor.
-		GaussianData(int num_gaussians, float* mean_data, float* rot_data, float* scale_data, float* alpha_data, float* color_data);
+		GaussianData(int num_gaussians, float* mean_data, float* rot_data, float* scale_data, float* alpha_data, float* color_data, float* filter_data);
 
 		void render(int G, int stride = 1) const;
 
@@ -41,6 +41,7 @@ namespace sibr {
 		GLuint scaleBuffer;
 		GLuint alphaBuffer;
 		GLuint colorBuffer;
+		GLuint filterBuffer;
 	};
 
 	/** Render a mesh colored using the per-vertex color attribute.
@@ -78,6 +79,9 @@ namespace sibr {
 			const sibr::Vector3f& cropMin,
 			const sibr::Vector3f& cropMax,
 			bool xray,
+			bool filterEnabled,
+			float filterMin,
+			float filterMax,
 			/*mode*/    sibr::Mesh::RenderMode mode = sibr::Mesh::FillRenderMode,
 			/*BFC*/     bool backFaceCulling = true);
 
@@ -104,6 +108,9 @@ namespace sibr {
 		GLParameter			_paramCropEnabled;
 		GLParameter			_paramCropMin;
 		GLParameter			_paramCropMax;
+		GLParameter			_paramFilterEnabled;
+		GLParameter			_paramFilterMin;
+		GLParameter			_paramFilterMax;
 		GLuint clearProg;
 		GLuint clearShader;
 	};

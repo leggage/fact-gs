@@ -17,7 +17,7 @@
 
 namespace sibr {
 
-	GaussianData::GaussianData(int num_gaussians, float* mean_data, float* rot_data, float* scale_data, float* alpha_data, float* color_data)
+	GaussianData::GaussianData(int num_gaussians, float* mean_data, float* rot_data, float* scale_data, float* alpha_data, float* color_data, float* filter_data)
 	{
 		_num_gaussians = num_gaussians;
 		glCreateBuffers(1, &meanBuffer);
@@ -25,11 +25,13 @@ namespace sibr {
 		glCreateBuffers(1, &scaleBuffer);
 		glCreateBuffers(1, &alphaBuffer);
 		glCreateBuffers(1, &colorBuffer);
+		glCreateBuffers(1, &filterBuffer);
 		glNamedBufferStorage(meanBuffer, num_gaussians * 3 * sizeof(float), mean_data, 0);
 		glNamedBufferStorage(rotBuffer, num_gaussians * 4 * sizeof(float), rot_data, 0);
 		glNamedBufferStorage(scaleBuffer, num_gaussians * 3 * sizeof(float), scale_data, 0);
 		glNamedBufferStorage(alphaBuffer, num_gaussians * sizeof(float), alpha_data, 0);
 		glNamedBufferStorage(colorBuffer, num_gaussians * sizeof(float) * 48, color_data, 0);
+		glNamedBufferStorage(filterBuffer, num_gaussians * sizeof(float), filter_data, 0);
 	}
 
 	void GaussianData::render(int G, int stride) const
@@ -39,6 +41,7 @@ namespace sibr {
 		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, scaleBuffer);
 		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, alphaBuffer);
 		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 4, colorBuffer);
+		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 5, filterBuffer);
 		const int safeStride = std::max(1, stride);
 		const int displayed = (G + safeStride - 1) / safeStride;
 		glDrawArraysInstanced(GL_TRIANGLES, 0, 36, displayed);
@@ -62,6 +65,9 @@ namespace sibr {
 		_paramCropEnabled.init(_shader, "crop_enabled");
 		_paramCropMin.init(_shader, "crop_min");
 		_paramCropMax.init(_shader, "crop_max");
+		_paramFilterEnabled.init(_shader, "filter_enabled");
+		_paramFilterMin.init(_shader, "filter_min");
+		_paramFilterMax.init(_shader, "filter_max");
 
 		glCreateTextures(GL_TEXTURE_2D, 1, &idTexture);
 		glTextureParameteri(idTexture, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
@@ -124,6 +130,7 @@ namespace sibr {
 		float limit, float alphaMin, float alphaMax, float opacityScale,
 		float scaleModifier, int stride, bool cropEnabled,
 		const sibr::Vector3f& cropMin, const sibr::Vector3f& cropMax, bool xray,
+		bool filterEnabled, float filterMin, float filterMax,
 		sibr::Mesh::RenderMode mode, bool backFaceCulling)
 	{
 		glBindFramebuffer(GL_FRAMEBUFFER, fbo);
@@ -155,6 +162,9 @@ namespace sibr {
 		_paramCropEnabled.set(cropEnabled ? 1 : 0);
 		_paramCropMin.set(cropMin);
 		_paramCropMax.set(cropMax);
+		_paramFilterEnabled.set(filterEnabled ? 1 : 0);
+		_paramFilterMin.set(filterMin);
+		_paramFilterMax.set(filterMax);
 
 		if (xray)
 		{

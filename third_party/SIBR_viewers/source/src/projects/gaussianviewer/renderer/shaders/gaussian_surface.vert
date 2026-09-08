@@ -23,6 +23,9 @@ uniform int instance_stride;
 uniform int crop_enabled;
 uniform vec3 crop_min;
 uniform vec3 crop_max;
+uniform int filter_enabled;
+uniform float filter_min;
+uniform float filter_max;
 
 layout (std430, binding = 0) buffer BoxCenters {
     float centers[];
@@ -38,6 +41,9 @@ layout (std430, binding = 3) buffer Alphas {
 };
 layout (std430, binding = 4) buffer Colors {
     float colors[];
+};
+layout (std430, binding = 5) buffer FilterValues {
+    float filter_values[];
 };
 
 mat3 quatToMat3(vec4 q) {
@@ -115,7 +121,10 @@ void main() {
 	bool outsideCrop = crop_enabled != 0 &&
 		(any(lessThan(ellipsoidCenter, crop_min)) || any(greaterThan(ellipsoidCenter, crop_max)));
 	bool outsideAlpha = a < alpha_min || a > alpha_max;
-	if(outsideCrop || outsideAlpha ||
+	float filterValue = filter_values[boxID];
+	bool outsideFilter = filter_enabled != 0 &&
+		(filterValue < filter_min || filterValue > filter_max);
+	if(outsideCrop || outsideAlpha || outsideFilter ||
 		(stage == 0 && a < alpha_limit) || (stage == 1 && a >= alpha_limit))
 		gl_Position = vec4(0,0,0,0);
 	else

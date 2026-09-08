@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import struct
 from pathlib import Path
 from typing import Iterable
 
@@ -48,6 +49,7 @@ def export_sibr_ply(
     color_label: str = "density",
     density_percentiles: tuple[float, float] = (1.0, 99.0),
     display_opacity: float = 0.35,
+    filter_threshold: float | None = None,
 ) -> dict:
     """Write a degree-0 binary PLY accepted by ``SIBR_gaussianViewer_app``.
 
@@ -98,6 +100,14 @@ def export_sibr_ply(
         handle.write(("\n".join(header) + "\n").encode("ascii"))
         handle.write(rows.tobytes(order="C"))
 
+    # Keep the raw diagnostic scalar separate from opacity and pseudo-colour.
+    # The patched SIBR viewer consumes this optional sidecar; the PLY remains
+    # compatible with the stock Graphdeco viewer.
+    recommended = float("nan") if filter_threshold is None else float(filter_threshold)
+    with path.with_suffix(".filter.bin").open("wb") as handle:
+        handle.write(struct.pack("<8sQf", b"FGSFILT1", n, recommended))
+        handle.write(np.asarray(color_value, dtype="<f4").tobytes(order="C"))
+
     stats = {
         "count": n,
         "density_min": float(np.nanmin(density)),
@@ -108,6 +118,8 @@ def export_sibr_ply(
         "color_low": low,
         "color_high": high,
         "display_opacity": float(opacity[0]),
+        "filter_threshold": None if filter_threshold is None else float(filter_threshold),
+        "filter_sidecar": path.with_suffix(".filter.bin").name,
         "scale_min": np.nanmin(scale, axis=0).astype(float).tolist(),
         "scale_max": np.nanmax(scale, axis=0).astype(float).tolist(),
     }
@@ -235,6 +247,7 @@ def export_gaussian_model(
     viewer_camera_mode: str = "orbit",
     color_value=None,
     color_label: str = "density",
+    filter_threshold: float | None = None,
 ) -> dict:
     """Export an in-memory :class:`GaussianModel` as one SIBR iteration."""
     target = Path(model_path) / "sibr" / "point_cloud" / f"iteration_{int(step)}" / "point_cloud.ply"
@@ -247,6 +260,7 @@ def export_gaussian_model(
         to_numpy(model.get_rotation),
         color_value=(to_numpy(color_value) if color_value is not None else None),
         color_label=color_label,
+        filter_threshold=filter_threshold,
     )
     ensure_minimal_sibr_scene(
         Path(model_path) / "sibr",
